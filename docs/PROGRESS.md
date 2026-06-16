@@ -2,7 +2,7 @@
 
 Update after every completed task. At session start, read this + `CLAUDE.md`.
 
-## Status: Auth + channels + messages + WebSocket + presence + shipments + DMs done (69 tests green). Next: AI summarization.
+## Status: Backend feature-complete — auth + channels + messages + WS + presence + shipments + DMs + AI summarization done (79 tests green). Next: frontend.
 
 ## Priority order (protect top to bottom under time pressure)
 1. **Core chat loop** — auth, channels, post/receive message in real time, presence. (non-negotiable)
@@ -26,7 +26,7 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 - [x] Presence (lazy last_seen+TTL, heartbeat, `GET /api/presence`) — included in ws.py
 - [x] DMs (find-or-create virtual channel, both memberships) — `app/routers/dm.py` + `tests/test_dms.py`
 - [x] Shipments router (`GET /api/shipments/{ref}`, case-insensitive, 404 on miss) — `app/routers/shipments.py` + `tests/test_shipments.py`
-- [ ] AI summarization (Gemini stream → requester WS, cache, fallback)
+- [x] AI summarization (Gemini stream → requester WS, cache, fallback) — `app/services/ai.py` + `app/routers/ai.py` + `tests/test_ai.py`
 - [ ] Frontend: `lib/xhr.ts`, `lib/api.ts`, auth context, useWebSocket hook
 - [ ] Frontend screens: login/register (XHR), channel list+unread, channel view, DM view, shipment card, presence dots, AI summary panel
 - [ ] Tests: auth, channels, messages, AI (mocked)
@@ -34,7 +34,14 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 - [ ] Loom 3–5 min
 
 ## Current task
-AI summarization — `POST /api/channels/{id}/summarize`: fetch last 50 messages, stream Gemini Flash chunks to requester's WS as `ai_summary` events (never to channel topic), Redis 5-min cache, fallback on error, correlation id. Test with mocked LLM.
+Frontend (Next.js 14 App Router) — `lib/xhr.ts` (login/register/message-send via XHR only), `lib/api.ts` (fetch), auth context, `useWebSocket` hook, then screens: login/register, channel list+unread, channel view, DM view, shipment card, presence dots, AI summary panel.
+
+## Notes (AI summarization — for interview defense)
+- Model id: `.env` LLM_MODEL set to `gemini-2.5-flash` (1.5 + 2.0 Flash retired; 2.0 shut down 2026-06-01). Bump to `gemini-3.5-flash` for newest GA. One-line swap — provider-agnostic via OpenAI-compatible client.
+- Summary streams to requester's WS only (`manager.send_to`), never the channel topic. Correlation id = `request_id`.
+- Cache `summary:{channel_id}` in Redis, 5-min TTL. Cache hit + empty channel return synchronously in HTTP body; cache miss streams over WS.
+- Background `asyncio.create_task` (ref held in module set vs GC); 20s overall timeout; fallback chunk on error; never raises out of the task.
+- **Not live-tested against Gemini yet** — needs docker (PG+Redis) up + a real WS client. Validate during frontend wiring / Loom.
 
 ## Notes / blockers
 - Verify current Gemini Flash model id before wiring AI.

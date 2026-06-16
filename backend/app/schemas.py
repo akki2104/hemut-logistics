@@ -129,6 +129,25 @@ class MessageListOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# AI summarization
+# ---------------------------------------------------------------------------
+
+
+class SummarizeResponse(BaseModel):
+    """Response from POST /api/channels/{id}/summarize.
+
+    `summary` is non-null only when the result is available synchronously —
+    a cache hit, or an empty channel. Otherwise it is null and the summary
+    streams over the requester's WebSocket as `ai_summary` events keyed by
+    `request_id`.
+    """
+
+    request_id: str
+    cached: bool
+    summary: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # Direct messages
 # ---------------------------------------------------------------------------
 
