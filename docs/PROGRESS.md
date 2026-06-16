@@ -2,7 +2,7 @@
 
 Update after every completed task. At session start, read this + `CLAUDE.md`.
 
-## Status: Auth + channels + messages routers done (39 tests green). Next: WebSocket + presence.
+## Status: Auth + channels + messages + WebSocket + presence done (50 tests green). Next: DMs router.
 
 ## Priority order (protect top to bottom under time pressure)
 1. **Core chat loop** — auth, channels, post/receive message in real time, presence. (non-negotiable)
@@ -22,8 +22,8 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 - [x] Auth module (schemas, JWT, `get_current_user`, register/login) — `app/auth.py`, `app/routers/auth.py`
 - [x] Channels router (list/create/join/leave/read, exclude is_dm, unread count) — `app/routers/channels.py` + `tests/test_channels.py`
 - [x] Messages router (POST + cursor history, Redis publish, sender read-cursor advance) — `app/routers/messages.py` + `tests/test_messages.py`
-- [ ] WebSocket `/ws/{user_id}` + ConnectionManager + Redis pub/sub fan-out
-- [ ] Presence (lazy last_seen+TTL, heartbeat, sweep broadcast)
+- [x] WebSocket `/api/ws` + ConnectionManager + Redis pub/sub fan-out — `app/routers/ws.py` + `tests/test_ws.py`
+- [x] Presence (lazy last_seen+TTL, heartbeat, `GET /api/presence`) — included in ws.py
 - [ ] DMs (find-or-create virtual channel, both memberships)
 - [ ] Shipments router + mock lookup
 - [ ] AI summarization (Gemini stream → requester WS, cache, fallback)
@@ -34,9 +34,8 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 - [ ] Loom 3–5 min
 
 ## Current task
-WebSocket + presence — `app/routers/ws.py`: single WS per user, JWT auth via query param,
-ConnectionManager (dict[user_id→ws]), Redis pub/sub subscriber task, ping/pong heartbeat
-that refreshes presence TTL, lazy last_seen presence in Redis.
+DMs router — `POST /api/dm/{peer_user_id}` (find-or-create `dm_{min}_{max}` channel, both
+memberships atomically), `GET /api/dm` (list active DM conversations). Then shipments router.
 
 ## Notes / blockers
 - Verify current Gemini Flash model id before wiring AI.
