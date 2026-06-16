@@ -45,3 +45,28 @@ async def client(db_session: AsyncSession) -> AsyncClient:
     ) as ac:
         yield ac
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def register_user(client: AsyncClient):
+    """Factory: register a user and return (auth_headers, user_dict).
+
+    Lets a single test create multiple authenticated identities on the same
+    rollback-ed session (e.g. to exercise membership isolation).
+    """
+
+    async def _make(
+        email: str = "user@hemut.com",
+        password: str = "password123",
+        display_name: str = "User",
+    ) -> tuple[dict[str, str], dict]:
+        resp = await client.post(
+            "/api/auth/register",
+            json={"email": email, "password": password, "display_name": display_name},
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        headers = {"Authorization": f"Bearer {body['access_token']}"}
+        return headers, body["user"]
+
+    return _make
