@@ -7,6 +7,8 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.routers import auth
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -40,9 +42,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# TODO: mount routers here as features are built, e.g.:
-# from app.routers import auth, channels, messages, ws, shipments, ai
-# app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+# TODO: mount remaining routers as features are built:
+# app.include_router(channels.router, prefix="/api/channels", tags=["channels"])
+# app.include_router(messages.router, prefix="/api", tags=["messages"])
+# app.include_router(shipments.router, prefix="/api/shipments", tags=["shipments"])
+# app.include_router(ws.router, tags=["websocket"])
 
 
 @app.get("/health", tags=["health"])

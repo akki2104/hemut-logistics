@@ -2,7 +2,7 @@
 
 Update after every completed task. At session start, read this + `CLAUDE.md`.
 
-## Status: Backend scaffold + initial migration done (ca9481fbf6e9), merged to main. Next: auth module.
+## Status: Auth module + seed script done. Next: channels router.
 
 ## Priority order (protect top to bottom under time pressure)
 1. **Core chat loop** — auth, channels, post/receive message in real time, presence. (non-negotiable)
@@ -18,8 +18,8 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 - [x] Backend scaffold (`main.py`, `db.py`, `config.py`)
 - [x] Models + async Alembic env.py configured
 - [x] Initial migration (`ca9481fbf6e9`) — all 5 tables + indexes applied
-- [ ] Seed (channels, 2 users, 10 shipments)
-- [ ] Auth module (model, schemas, JWT, `get_current_user`, register/login)
+- [x] Seed (channels, 2 users, 10 shipments) — `app/seed.py`
+- [x] Auth module (schemas, JWT, `get_current_user`, register/login) — `app/auth.py`, `app/routers/auth.py`
 - [ ] Channels router (list/create/join/leave/read, exclude is_dm from list)
 - [ ] Messages router (POST + cursor history)
 - [ ] WebSocket `/ws/{user_id}` + ConnectionManager + Redis pub/sub fan-out
@@ -34,7 +34,7 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 - [ ] Loom 3–5 min
 
 ## Current task
-Auth module — `app/models.py` (User already defined), schemas, JWT utils, `get_current_user` dependency, register/login router.
+Channels router — `app/routers/channels.py`: list (exclude is_dm), create, join, leave, mark-read. Unread count via memberships.
 
 ## Notes / blockers
 - Verify current Gemini Flash model id before wiring AI.
