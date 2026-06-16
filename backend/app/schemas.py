@@ -128,6 +128,39 @@ class MessageListOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Direct messages
+# ---------------------------------------------------------------------------
+
+
+class PeerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    display_name: str
+
+
+class DMOpenOut(BaseModel):
+    """Returned by POST /api/dm/{peer_user_id} — the resolved channel id + peer."""
+
+    channel_id: int
+    peer: PeerOut
+
+
+class DMConversationOut(BaseModel):
+    """One entry in the caller's DM conversation list."""
+
+    channel_id: int
+    peer_id: int
+    peer_display_name: str
+    unread_count: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Shipments
+# ---------------------------------------------------------------------------
+
+
 class ShipmentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
