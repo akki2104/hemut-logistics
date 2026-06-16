@@ -81,7 +81,7 @@ Single root `.env` (see `docs/ARCHITECTURE.md` for the template). Backend reads 
 
 - **Python:** type hints + docstrings on all public functions; everything DB/external is `async`; `logging` not `print`; return Pydantic models not raw dicts; specific exceptions → correct HTTP status; constants at module top.
 - **TypeScript:** strict, no `any`; components PascalCase, hooks camelCase; Tailwind only; `@/` absolute imports; props as interfaces.
-- **Commits:** `[scope] description` (e.g. `[backend] add auth endpoints`), frequently, no cluade code as co-author
+- **Commits:** `[scope] description` (e.g. `[backend] add auth endpoints`), frequently, no cluade code as co-author, see `docs/GIT_RULES.md` to follow the commit and push rules.
 
 ## References
 
