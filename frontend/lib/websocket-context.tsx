@@ -59,14 +59,10 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   const [presence, setPresence] = useState<Record<number, PresenceStatus>>({});
 
-  // Refs hold mutable connection machinery that must survive re-renders
-  // without retriggering effects.
-  const socketRef = useRef<WebSocket | null>(null);
+  // Listeners persist across renders. All *connection* state (socket, timers,
+  // backoff, stop flag) lives inside each effect run's closure instead — see
+  // the note on the effect below.
   const listenersRef = useRef<Set<Listener>>(new Set());
-  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const backoffRef = useRef(1_000);
-  const intentionalCloseRef = useRef(false);
 
   const subscribe = useCallback((listener: Listener) => {
     listenersRef.current.add(listener);
@@ -92,26 +88,33 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    intentionalCloseRef.current = false;
-
-    const clearTimers = () => {
-      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-      if (reconnectRef.current) clearTimeout(reconnectRef.current);
-      heartbeatRef.current = null;
-      reconnectRef.current = null;
-    };
+    // IMPORTANT: every piece of connection state is LOCAL to this effect run.
+    // React Strict Mode (dev) mounts → cleans up → mounts again; sharing a
+    // socket/timer across runs via refs lets the first run's teardown race the
+    // second run's socket (orphaning the live connection). Closure-local state
+    // means each run owns exactly one connection and cleans up only its own.
+    let stopped = false;
+    let socket: WebSocket | null = null;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+    let reconnect: ReturnType<typeof setTimeout> | null = null;
+    let backoff = 1_000;
 
     const connect = () => {
+      if (stopped) return;
       setStatus("connecting");
       const ws = new WebSocket(buildWsUrl(token));
-      socketRef.current = ws;
+      socket = ws;
 
       ws.onopen = () => {
+        if (stopped) {
+          ws.close();
+          return;
+        }
         setStatus("open");
-        backoffRef.current = 1_000; // reset backoff on a clean open
+        backoff = 1_000; // reset backoff on a clean open
         setConnectionEpoch((e) => e + 1);
-        // Start the heartbeat. The server refreshes presence TTL on ping.
-        heartbeatRef.current = setInterval(() => {
+        // Heartbeat: the server refreshes presence TTL on each ping.
+        heartbeat = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "ping" }));
           }
@@ -136,17 +139,19 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       };
 
       ws.onclose = () => {
-        clearTimers();
-        socketRef.current = null;
-        if (intentionalCloseRef.current) {
+        if (heartbeat) {
+          clearInterval(heartbeat);
+          heartbeat = null;
+        }
+        if (stopped) {
           setStatus("closed");
           return;
         }
         // Unexpected drop → reconnect with capped exponential backoff.
         setStatus("connecting");
-        const delay = backoffRef.current;
-        backoffRef.current = Math.min(delay * 2, MAX_BACKOFF_MS);
-        reconnectRef.current = setTimeout(connect, delay);
+        const delay = backoff;
+        backoff = Math.min(delay * 2, MAX_BACKOFF_MS);
+        reconnect = setTimeout(connect, delay);
       };
 
       ws.onerror = () => {
@@ -158,10 +163,14 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     connect();
 
     return () => {
-      intentionalCloseRef.current = true;
-      clearTimers();
-      socketRef.current?.close();
-      socketRef.current = null;
+      stopped = true;
+      if (heartbeat) clearInterval(heartbeat);
+      if (reconnect) clearTimeout(reconnect);
+      if (socket) {
+        // Detach onclose first so closing here never schedules a reconnect.
+        socket.onclose = null;
+        socket.close();
+      }
     };
   }, [token, emit]);
 
