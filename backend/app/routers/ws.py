@@ -110,32 +110,51 @@ async def _load_channel_ids(user_id: int) -> list[int]:
         return list(result.scalars().all())
 
 
-async def _subscriber_task(user_id: int, pubsub: aioredis.client.PubSub) -> None:
+async def _subscriber_task(user_id: int, topics: list[str]) -> None:
     """Continuously relay Redis channel events to the user's WebSocket.
 
-    Runs until cancelled (on WS disconnect). The finally block unsubscribes
-    and closes the pubsub connection regardless of how the task ends.
+    Owns its own pubsub connection and reconnects with exponential backoff on
+    any transient Redis error (timeout, connection reset, etc.).  Only exits
+    permanently on asyncio.CancelledError (clean WS disconnect).
     """
-    try:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            try:
-                data = json.loads(message["data"])
-            except (json.JSONDecodeError, TypeError):
-                logger.warning("Malformed Redis message for user_id=%d", user_id)
-                continue
-            await manager.send_to(user_id, data)
-    except asyncio.CancelledError:
-        pass
-    except Exception:
-        logger.exception("Subscriber task crashed for user_id=%d", user_id)
-    finally:
+    backoff = 1.0
+    while True:
+        pubsub: Optional[aioredis.client.PubSub] = None
         try:
-            await pubsub.unsubscribe()
-            await pubsub.close()
+            r: aioredis.Redis = aioredis.Redis(connection_pool=redis_pool)
+            pubsub = r.pubsub()
+            if topics:
+                await pubsub.subscribe(*topics)
+                logger.info(
+                    "user_id=%d (re)subscribed to %d topics", user_id, len(topics)
+                )
+            backoff = 1.0  # reset after a successful (re)connect
+            async for message in pubsub.listen():
+                if message["type"] != "message":
+                    continue
+                try:
+                    data = json.loads(message["data"])
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("Malformed Redis message for user_id=%d", user_id)
+                    continue
+                await manager.send_to(user_id, data)
+        except asyncio.CancelledError:
+            break  # clean shutdown — exit the loop
         except Exception:
-            pass
+            logger.warning(
+                "Subscriber task error for user_id=%d, reconnecting in %.1fs",
+                user_id,
+                backoff,
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+        finally:
+            if pubsub is not None:
+                try:
+                    await pubsub.unsubscribe()
+                    await pubsub.close()
+                except Exception:
+                    pass
 
 
 # ---------------------------------------------------------------------------
@@ -168,26 +187,21 @@ async def websocket_endpoint(
     # -- Accept connection, replacing any prior one for this user --
     await manager.connect(user_id, ws)
 
+    # Separate Redis client for presence (commands, not pub/sub)
     redis: aioredis.Redis = aioredis.Redis(connection_pool=redis_pool)
-    pubsub: aioredis.client.PubSub = redis.pubsub()
     subscriber: Optional[asyncio.Task] = None
 
     try:
         # Stamp presence immediately
         await _refresh_presence(redis, user_id)
 
-        # Subscribe to all channel topics the user is a member of
+        # Build topic list; the task creates and owns its pubsub connection
         channel_ids = await _load_channel_ids(user_id)
-        if channel_ids:
-            topics = [f"channel:{cid}" for cid in channel_ids]
-            await pubsub.subscribe(*topics)
-            logger.info(
-                "user_id=%d subscribed to %d channel topics", user_id, len(topics)
-            )
+        topics = [f"channel:{cid}" for cid in channel_ids]
 
-        # Start background fan-out task
+        # Start background fan-out task (auto-reconnects on Redis blips)
         subscriber = asyncio.create_task(
-            _subscriber_task(user_id, pubsub),
+            _subscriber_task(user_id, topics),
             name=f"ws-sub-{user_id}",
         )
 

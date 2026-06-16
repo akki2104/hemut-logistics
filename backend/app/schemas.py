@@ -48,6 +48,16 @@ class TokenResponse(BaseModel):
     user: UserOut
 
 
+class DirectoryUserOut(BaseModel):
+    """A user as shown in the 'start a DM' picker — no sensitive fields."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    display_name: str
+
+
 # ---------------------------------------------------------------------------
 # Channels
 # ---------------------------------------------------------------------------
