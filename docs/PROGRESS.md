@@ -2,7 +2,7 @@
 
 Update after every completed task. At session start, read this + `CLAUDE.md`.
 
-## Status: Auth + channels routers done (26 tests green). Next: messages router.
+## Status: Auth + channels + messages routers done (39 tests green). Next: WebSocket + presence.
 
 ## Priority order (protect top to bottom under time pressure)
 1. **Core chat loop** — auth, channels, post/receive message in real time, presence. (non-negotiable)
@@ -21,7 +21,7 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 - [x] Seed (channels, 2 users, 10 shipments) — `app/seed.py`
 - [x] Auth module (schemas, JWT, `get_current_user`, register/login) — `app/auth.py`, `app/routers/auth.py`
 - [x] Channels router (list/create/join/leave/read, exclude is_dm, unread count) — `app/routers/channels.py` + `tests/test_channels.py`
-- [ ] Messages router (POST + cursor history)
+- [x] Messages router (POST + cursor history, Redis publish, sender read-cursor advance) — `app/routers/messages.py` + `tests/test_messages.py`
 - [ ] WebSocket `/ws/{user_id}` + ConnectionManager + Redis pub/sub fan-out
 - [ ] Presence (lazy last_seen+TTL, heartbeat, sweep broadcast)
 - [ ] DMs (find-or-create virtual channel, both memberships)
@@ -34,9 +34,9 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 - [ ] Loom 3–5 min
 
 ## Current task
-Messages router — `app/routers/channels.py` sub-routes or `app/routers/messages.py`:
-POST `/api/channels/{id}/messages` (XHR, sender from JWT, persist → publish to Redis),
-GET `/api/channels/{id}/messages?before_id=&after_id=&limit=50` (cursor pagination).
+WebSocket + presence — `app/routers/ws.py`: single WS per user, JWT auth via query param,
+ConnectionManager (dict[user_id→ws]), Redis pub/sub subscriber task, ping/pong heartbeat
+that refreshes presence TTL, lazy last_seen presence in Redis.
 
 ## Notes / blockers
 - Verify current Gemini Flash model id before wiring AI.

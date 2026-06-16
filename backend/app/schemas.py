@@ -89,3 +89,35 @@ class MarkReadRequest(BaseModel):
 
 class ActionResponse(BaseModel):
     detail: str
+
+
+# ---------------------------------------------------------------------------
+# Messages
+# ---------------------------------------------------------------------------
+
+
+class MessageCreate(BaseModel):
+    content: str
+
+    @field_validator("content")
+    @classmethod
+    def content_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Message content cannot be blank")
+        return v
+
+
+class MessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    channel_id: int
+    sender_id: int
+    sender_name: str  # denormalized from users table at query time
+    content: str
+    created_at: datetime
+
+
+class MessageListOut(BaseModel):
+    messages: list[MessageOut]
+    has_more: bool  # true when more pages exist in the requested direction
