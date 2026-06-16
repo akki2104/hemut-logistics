@@ -86,7 +86,7 @@ The goal is to maintain a clean, understandable history while still working safe
 * Create a feature branch for every meaningful task or milestone.
 * Keep branches focused on a single concern.
 * Prefer short-lived branches (hours, not days).
-* Delete merged branches after completion.
+* **Do NOT delete merged branches** — keep them so the evaluator can see the full development history.
 
 Examples:
 
@@ -140,8 +140,8 @@ The evaluator should primarily view a clean `main` branch.
 
 Before submission:
 
-* Ensure all completed feature branches are merged.
-* Remove stale branches.
+* Ensure all completed feature branches are merged into `main`.
+* Keep all feature branches visible on remote — do not delete them.
 * Ensure `main` contains the final working version.
 * Ensure commit history reflects the order in which the system was built.
 * Tag the final submission commit if desired:
