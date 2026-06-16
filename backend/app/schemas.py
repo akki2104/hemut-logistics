@@ -121,3 +121,21 @@ class MessageOut(BaseModel):
 class MessageListOut(BaseModel):
     messages: list[MessageOut]
     has_more: bool  # true when more pages exist in the requested direction
+
+
+# ---------------------------------------------------------------------------
+# Shipments
+# ---------------------------------------------------------------------------
+
+
+class ShipmentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    shipment_ref: str
+    origin: str
+    destination: str
+    carrier: str
+    status: str  # IN_TRANSIT | DELIVERED | DELAYED
+    eta: Optional[datetime]
+    created_at: datetime

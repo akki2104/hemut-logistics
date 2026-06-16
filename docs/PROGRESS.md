@@ -2,7 +2,7 @@
 
 Update after every completed task. At session start, read this + `CLAUDE.md`.
 
-## Status: Auth + channels + messages + WebSocket + presence done (50 tests green). Next: DMs router.
+## Status: Auth + channels + messages + WebSocket + presence + shipments done (57 tests green). Next: DMs router.
 
 ## Priority order (protect top to bottom under time pressure)
 1. **Core chat loop** — auth, channels, post/receive message in real time, presence. (non-negotiable)
@@ -25,7 +25,7 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 - [x] WebSocket `/api/ws` + ConnectionManager + Redis pub/sub fan-out — `app/routers/ws.py` + `tests/test_ws.py`
 - [x] Presence (lazy last_seen+TTL, heartbeat, `GET /api/presence`) — included in ws.py
 - [ ] DMs (find-or-create virtual channel, both memberships)
-- [ ] Shipments router + mock lookup
+- [x] Shipments router (`GET /api/shipments/{ref}`, case-insensitive, 404 on miss) — `app/routers/shipments.py` + `tests/test_shipments.py`
 - [ ] AI summarization (Gemini stream → requester WS, cache, fallback)
 - [ ] Frontend: `lib/xhr.ts`, `lib/api.ts`, auth context, useWebSocket hook
 - [ ] Frontend screens: login/register (XHR), channel list+unread, channel view, DM view, shipment card, presence dots, AI summary panel
@@ -35,7 +35,7 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 
 ## Current task
 DMs router — `POST /api/dm/{peer_user_id}` (find-or-create `dm_{min}_{max}` channel, both
-memberships atomically), `GET /api/dm` (list active DM conversations). Then shipments router.
+memberships atomically), `GET /api/dm` (list active DM conversations). Then AI summarization.
 
 ## Notes / blockers
 - Verify current Gemini Flash model id before wiring AI.

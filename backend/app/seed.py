@@ -6,7 +6,7 @@ Idempotent: skips rows that already exist (checked by natural key).
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +34,8 @@ USERS = [
     {"email": "driver@hemut.com", "display_name": "Driver", "password": "password123"},
 ]
 
-_now = datetime.now(timezone.utc)
+# Naive UTC — Shipment.eta column is TIMESTAMP WITHOUT TIME ZONE.
+_now = datetime.utcnow()
 
 SHIPMENTS = [
     {
