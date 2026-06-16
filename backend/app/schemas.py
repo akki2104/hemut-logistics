@@ -1,6 +1,7 @@
 """Pydantic request/response models shared across routers."""
 
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
@@ -45,3 +46,46 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+
+
+# ---------------------------------------------------------------------------
+# Channels
+# ---------------------------------------------------------------------------
+
+
+class ChannelCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, v: str) -> str:
+        """Channel name must contain non-whitespace and fit the column."""
+        v = v.strip()
+        if not v:
+            raise ValueError("Channel name cannot be blank")
+        if len(v) > 100:
+            raise ValueError("Channel name must be 100 characters or fewer")
+        return v
+
+
+class ChannelOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: Optional[str]
+    is_dm: bool
+    created_by: Optional[int]
+    created_at: datetime
+    # Count of messages newer than the caller's last_read_message_id
+    unread_count: int = 0
+
+
+class MarkReadRequest(BaseModel):
+    # If omitted, the server marks the channel read up to its latest message
+    message_id: Optional[int] = None
+
+
+class ActionResponse(BaseModel):
+    detail: str
