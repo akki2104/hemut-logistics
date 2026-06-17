@@ -3,12 +3,18 @@
 import { useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { xhrSendMessage, XhrError } from "@/lib/xhr";
+import { parseShipmentCommand } from "@/lib/ship";
+import ShipmentCard from "@/components/ShipmentCard";
 
 /**
  * Message composer. Sends via the XHR helper (graded constraint — NOT fetch).
  * We don't optimistically insert: the server publishes the saved message to
  * the channel's Redis topic, and our own WebSocket is subscribed, so the
  * message echoes back with its real id. The message list dedupes by id.
+ *
+ * Also handles the `/shipment <id>` slash command: instead of posting a
+ * message, it renders an ephemeral shipment preview visible only to the
+ * sender (Slack-style) — a quick logistics lookup without spamming the channel.
  */
 export default function MessageComposer({
   channelId,
@@ -21,11 +27,26 @@ export default function MessageComposer({
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Ephemeral, sender-only shipment preview from the /shipment command.
+  const [previewRef, setPreviewRef] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  const isShipmentCommand = content.trimStart().toLowerCase().startsWith("/shipment");
 
   const send = async () => {
     const text = content.trim();
     if (!text || !token || sending) return;
+
+    // Intercept the /shipment <id> slash command — local lookup, no message sent.
+    const cmdRef = parseShipmentCommand(text);
+    if (cmdRef) {
+      setPreviewRef(cmdRef);
+      setContent("");
+      setError(null);
+      taRef.current?.focus();
+      return;
+    }
+
     setSending(true);
     setError(null);
     try {
@@ -52,6 +73,29 @@ export default function MessageComposer({
   return (
     <div className="border-t border-slate-200 px-4 py-3">
       {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
+      {previewRef && (
+        <div className="mb-2">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-500">
+              Shipment preview · only visible to you
+            </span>
+            <button
+              onClick={() => setPreviewRef(null)}
+              className="text-xs font-medium text-slate-400 hover:text-slate-600"
+              aria-label="Dismiss shipment preview"
+            >
+              Dismiss ✕
+            </button>
+          </div>
+          <ShipmentCard shipmentRef={previewRef} showNotFound />
+        </div>
+      )}
+      {isShipmentCommand && (
+        <p className="mb-2 text-xs text-slate-400">
+          Tip: <span className="font-mono">/shipment SHIP-001</span> shows a
+          private shipment preview (not posted to the channel).
+        </p>
+      )}
       <div className="flex items-end gap-2 rounded-xl border border-slate-300 px-3 py-2 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500">
         <textarea
           ref={taRef}
