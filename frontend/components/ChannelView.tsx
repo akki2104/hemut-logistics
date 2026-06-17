@@ -136,7 +136,7 @@ export default function ChannelView({ channelId }: { channelId: number }) {
     : `Message #${channel?.name ?? ""}`;
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
+    <div className="flex min-h-0 flex-1 min-w-0 flex-col">
       {/* Header */}
       <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">

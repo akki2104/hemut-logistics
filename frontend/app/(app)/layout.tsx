@@ -34,7 +34,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <WorkspaceProvider>
         <div className="grid h-screen grid-cols-[280px_1fr] overflow-hidden">
           <Sidebar />
-          <main className="flex min-w-0 flex-col bg-white">{children}</main>
+          <main className="flex min-w-0 flex-col overflow-hidden bg-white">{children}</main>
         </div>
       </WorkspaceProvider>
     </WebSocketProvider>
