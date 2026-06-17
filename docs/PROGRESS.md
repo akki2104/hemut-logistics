@@ -2,7 +2,7 @@
 
 Update after every completed task. At session start, read this + `CLAUDE.md`.
 
-## Status: Backend feature-complete — auth + channels + messages + WS + presence + shipments + DMs + AI summarization done (79 tests green). Next: frontend.
+## Status: Frontend + backend complete. AI summary renders markdown. Next: standout features (reconnect replay, unread badges, presence dots, inline shipment cards) + 2nd AI feature (delay detection) + Loom + Deployment
 
 ## Priority order (protect top to bottom under time pressure)
 1. **Core chat loop** — auth, channels, post/receive message in real time, presence. (non-negotiable)
@@ -30,8 +30,11 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 - [x] Frontend: `lib/xhr.ts`, `lib/api.ts`, auth context, WebSocket provider
 - [x] Frontend screens: login/register (XHR), channel list+unread, channel view, DM view, shipment card, presence dots, AI summary panel
 - [ ] Tests: auth, channels, messages, AI (mocked) — backend done (82); frontend has no test harness yet
+- [x] AI summary markdown rendering — `react-markdown` + `@tailwindcss/typography` (`bug/fix-summary-markdown`)
+- [ ] 2nd AI feature — delay/exception detection ("Sentinel")
 - [ ] README (setup, architecture, AI justification, tradeoffs, production)
 - [ ] Loom 3–5 min
+- [ ] Deployment
 
 ### Frontend build plan (feature branch: `feature/frontend-chat`) — COMPLETE
 1. [x] Scaffold Next.js 14 (TS strict, Tailwind, App Router, `@/*` alias) in `frontend/`
@@ -46,7 +49,7 @@ Update after every completed task. At session start, read this + `CLAUDE.md`.
 - Backend addition this branch: `GET /api/users` directory endpoint for the DM picker (+3 tests, 82 total).
 
 ## Current task
-Frontend (Next.js 14 App Router) — `lib/xhr.ts` (login/register/message-send via XHR only), `lib/api.ts` (fetch), auth context, `useWebSocket` hook, then screens: login/register, channel list+unread, channel view, DM view, shipment card, presence dots, AI summary panel.
+2nd AI feature — proactive delay/exception detection ("Sentinel"): hook into message POST pipeline, keyword pre-filter → LLM structured extraction → validate shipment ref → push alert to #delays channel via Redis pub/sub.
 
 ## Notes (AI summarization — for interview defense)
 - Model id: `.env` LLM_MODEL set to `gemini-2.5-flash` (1.5 + 2.0 Flash retired; 2.0 shut down 2026-06-01). Bump to `gemini-3.5-flash` for newest GA. One-line swap — provider-agnostic via OpenAI-compatible client.
