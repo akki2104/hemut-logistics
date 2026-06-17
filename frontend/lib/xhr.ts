@@ -194,13 +194,15 @@ export function xhrSendMessage(
   channelId: number,
   content: string,
   token: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (event: ProgressEvent) => void
 ): Promise<Message> {
   return xhrRequest<Message>(`/api/channels/${channelId}/messages`, {
     method: "POST",
     body: { content },
     token,
     signal,
+    onProgress,
   });
 }
 
