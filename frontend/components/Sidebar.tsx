@@ -6,7 +6,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { useWebSocket } from "@/lib/websocket-context";
 import { useWorkspace } from "@/lib/workspace-context";
-import { addMember, createChannel, getPresence, leaveChannel, listUsers, openDM } from "@/lib/api";
+import { getPresence, leaveChannel, listUsers, openDM } from "@/lib/api";
+import { xhrAddMember as addMember, xhrCreateChannel as createChannel } from "@/lib/xhr";
 import type { DirectoryUser, PresenceStatus } from "@/lib/types";
 import PresenceDot from "./PresenceDot";
 
@@ -330,7 +331,11 @@ function NewChannelDialog({
   const toggle = (userId: number) =>
     setSelected((prev) => {
       const next = new Set(prev);
-      next.has(userId) ? next.delete(userId) : next.add(userId);
+      if (next.has(userId)) {
+        next.delete(userId);
+      } else {
+        next.add(userId);
+      }
       return next;
     });
 

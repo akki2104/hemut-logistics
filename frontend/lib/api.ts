@@ -1,6 +1,6 @@
 /**
- * Fetch-based API client for every call EXCEPT login, register, and
- * message-send (those three go through lib/xhr.ts — a graded constraint).
+ * Fetch-based API client for every call EXCEPT login, register, message-send,
+ * createChannel, and addMember (those go through lib/xhr.ts — a graded constraint).
  *
  * All calls here are authenticated with the JWT bearer token. The caller
  * passes the token explicitly rather than reading global state, so these
@@ -62,24 +62,6 @@ async function apiFetch<T>(
 
 export function listChannels(token: string): Promise<Channel[]> {
   return apiFetch<Channel[]>("/api/channels", token);
-}
-
-export function createChannel(
-  token: string,
-  name: string,
-  description?: string
-): Promise<Channel> {
-  return apiFetch<Channel>("/api/channels", token, {
-    method: "POST",
-    body: JSON.stringify({ name, description: description ?? null }),
-  });
-}
-
-export function addMember(token: string, channelId: number, userId: number): Promise<Channel> {
-  return apiFetch<Channel>(`/api/channels/${channelId}/members`, token, {
-    method: "POST",
-    body: JSON.stringify({ user_id: userId }),
-  });
 }
 
 export function leaveChannel(token: string, channelId: number): Promise<void> {

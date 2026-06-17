@@ -9,7 +9,7 @@
  * typed Promise so callers don't deal with readyState soup.
  */
 
-import type { AuthResponse, Message } from "./types";
+import type { AuthResponse, Channel, Message } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -186,5 +186,29 @@ export function xhrSendMessage(
     body: { content },
     token,
     signal,
+  });
+}
+
+export function xhrCreateChannel(
+  token: string,
+  name: string,
+  description?: string
+): Promise<Channel> {
+  return xhrRequest<Channel>("/api/channels", {
+    method: "POST",
+    body: { name, description: description ?? null },
+    token,
+  });
+}
+
+export function xhrAddMember(
+  token: string,
+  channelId: number,
+  userId: number
+): Promise<Channel> {
+  return xhrRequest<Channel>(`/api/channels/${channelId}/members`, {
+    method: "POST",
+    body: { user_id: userId },
+    token,
   });
 }
