@@ -97,6 +97,10 @@ class MarkReadRequest(BaseModel):
     message_id: Optional[int] = None
 
 
+class AddMemberRequest(BaseModel):
+    user_id: int
+
+
 class ActionResponse(BaseModel):
     detail: str
 

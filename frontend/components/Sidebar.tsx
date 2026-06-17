@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { useWebSocket } from "@/lib/websocket-context";
 import { useWorkspace } from "@/lib/workspace-context";
-import { createChannel, getPresence, listUsers, openDM } from "@/lib/api";
+import { addMember, createChannel, getPresence, leaveChannel, listUsers, openDM } from "@/lib/api";
 import type { DirectoryUser, PresenceStatus } from "@/lib/types";
 import PresenceDot from "./PresenceDot";
 
@@ -56,6 +56,20 @@ export default function Sidebar() {
     [wsPresence, polled]
   );
 
+  const handleLeave = useCallback(
+    async (channelId: number) => {
+      if (!token) return;
+      try {
+        await leaveChannel(token, channelId);
+        if (pathname === `/channels/${channelId}`) router.push("/");
+        await refresh();
+      } catch {
+        /* silently ignore — channel stays in list */
+      }
+    },
+    [token, pathname, router, refresh]
+  );
+
   return (
     <aside className="flex h-full flex-col border-r border-slate-200 bg-slate-50">
       {/* Workspace header */}
@@ -78,7 +92,7 @@ export default function Sidebar() {
             const href = `/channels/${c.id}`;
             const active = pathname === href;
             return (
-              <li key={c.id}>
+              <li key={c.id} className="group relative">
                 <Link
                   href={href}
                   className={`flex items-center justify-between rounded-md px-2 py-1.5 text-sm ${
@@ -90,7 +104,24 @@ export default function Sidebar() {
                   <span className="truncate">
                     <span className="text-slate-400">#</span> {c.name}
                   </span>
-                  {c.unread_count > 0 && <UnreadBadge count={c.unread_count} />}
+                  <span className="flex items-center gap-1">
+                    {c.unread_count > 0 && (
+                      <span className="group-hover:hidden">
+                        <UnreadBadge count={c.unread_count} />
+                      </span>
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void handleLeave(c.id);
+                      }}
+                      title="Leave channel"
+                      className="hidden group-hover:inline-flex items-center rounded px-1.5 py-0.5 text-xs text-slate-400 hover:bg-red-50 hover:text-red-500"
+                    >
+                      Leave
+                    </button>
+                  </span>
                 </Link>
               </li>
             );
@@ -266,32 +297,118 @@ function NewChannelDialog({
   onCreated: (channelId: number) => void;
 }) {
   const { token } = useAuth();
+
+  // Step 1: create
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const submit = async (e: React.FormEvent) => {
+  // Step 2: add members
+  const [createdId, setCreatedId] = useState<number | null>(null);
+  const [users, setUsers] = useState<DirectoryUser[] | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [adding, setAdding] = useState(false);
+
+  const create = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
     setSubmitting(true);
     setError(null);
     try {
-      const channel = await createChannel(
-        token,
-        name.trim(),
-        description.trim() || undefined
-      );
-      onCreated(channel.id);
+      const channel = await createChannel(token, name.trim(), description.trim() || undefined);
+      setCreatedId(channel.id);
+      // Pre-load users so the picker is ready immediately
+      const all = await listUsers(token);
+      setUsers(all);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create channel");
       setSubmitting(false);
     }
   };
 
+  const toggle = (userId: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(userId) ? next.delete(userId) : next.add(userId);
+      return next;
+    });
+
+  const addMembers = async () => {
+    if (!token || createdId === null) return;
+    setAdding(true);
+    setError(null);
+    try {
+      await Promise.all(Array.from(selected).map((uid) => addMember(token, createdId, uid)));
+      onCreated(createdId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add some members");
+      setAdding(false);
+    }
+  };
+
+  // Step 2 — member picker
+  if (createdId !== null) {
+    return (
+      <DialogShell title={`Add people to #${name}`} onClose={onClose}>
+        {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+        {users === null ? (
+          <p className="py-4 text-center text-sm text-slate-400">Loading team…</p>
+        ) : users.length === 0 ? (
+          <p className="py-4 text-center text-sm text-slate-400">No one else to add.</p>
+        ) : (
+          <ul className="mb-3 max-h-60 space-y-0.5 overflow-y-auto scrollbar-thin">
+            {users.map((u) => (
+              <li key={u.id}>
+                <button
+                  onClick={() => toggle(u.id)}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
+                >
+                  <span
+                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-xs font-bold ${
+                      selected.has(u.id)
+                        ? "border-indigo-600 bg-indigo-600 text-white"
+                        : "border-slate-300 text-transparent"
+                    }`}
+                  >
+                    ✓
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium text-slate-900">
+                      {u.display_name}
+                    </span>
+                    <span className="block truncate text-xs text-slate-400">{u.email}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={() => onCreated(createdId)}
+            className="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100"
+          >
+            Skip
+          </button>
+          <button
+            onClick={addMembers}
+            disabled={adding || selected.size === 0}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+          >
+            {adding
+              ? "Adding…"
+              : `Add ${selected.size > 0 ? selected.size : ""} member${selected.size !== 1 ? "s" : ""}`.trim()}
+          </button>
+        </div>
+      </DialogShell>
+    );
+  }
+
+  // Step 1 — name + description
   return (
     <DialogShell title="Create a channel" onClose={onClose}>
-      <form onSubmit={submit} className="space-y-3">
+      <form onSubmit={create} className="space-y-3">
         <input
           autoFocus
           value={name}

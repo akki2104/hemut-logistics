@@ -15,8 +15,8 @@ JWT in `Authorization: Bearer <token>`. Server validates credentials against Pos
 |---|---|---|
 | GET | `/api/channels` | user's joined channels; **excludes `is_dm=true`**; includes unread count |
 | POST | `/api/channels` | `{name, description}` create |
-| POST | `/api/channels/{id}/join` | join |
-| POST | `/api/channels/{id}/leave` | leave |
+| POST | `/api/channels/{id}/members` | `{user_id}` add a user; caller must be a member |
+| POST | `/api/channels/{id}/leave` | caller leaves the channel |
 | POST | `/api/channels/{id}/read` | set `last_read_message_id` |
 
 ## Messages

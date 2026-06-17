@@ -75,6 +75,17 @@ export function createChannel(
   });
 }
 
+export function addMember(token: string, channelId: number, userId: number): Promise<Channel> {
+  return apiFetch<Channel>(`/api/channels/${channelId}/members`, token, {
+    method: "POST",
+    body: JSON.stringify({ user_id: userId }),
+  });
+}
+
+export function leaveChannel(token: string, channelId: number): Promise<void> {
+  return apiFetch<void>(`/api/channels/${channelId}/leave`, token, { method: "POST" });
+}
+
 export function markChannelRead(
   token: string,
   channelId: number,

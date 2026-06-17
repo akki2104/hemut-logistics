@@ -20,6 +20,7 @@ from app.db import get_session
 from app.models import Channel, Membership, Message, User
 from app.schemas import (
     ActionResponse,
+    AddMemberRequest,
     ChannelCreate,
     ChannelOut,
     MarkReadRequest,
@@ -139,34 +140,46 @@ async def create_channel(
     return out
 
 
-@router.post("/{channel_id}/join", response_model=ChannelOut)
-async def join_channel(
+@router.post("/{channel_id}/members", response_model=ChannelOut, status_code=status.HTTP_201_CREATED)
+async def add_member(
     channel_id: int,
+    body: AddMemberRequest,
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> ChannelOut:
-    """Join a public channel. Idempotent. DM channels cannot be joined here."""
+    """Add another user to a channel. Caller must already be a member. Idempotent."""
     channel = await session.get(Channel, channel_id)
     if channel is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found")
     if channel.is_dm:
-        # DMs are private; joining one by id would be a tenancy leak
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Direct message channels cannot be joined directly",
+            detail="Cannot add members to a DM channel",
         )
 
-    existing = await session.execute(
+    # Caller must be a member (creator always is after POST /api/channels)
+    caller = await session.execute(
         select(Membership.id).where(
             Membership.user_id == user.id, Membership.channel_id == channel_id
         )
     )
+    if caller.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not a member of this channel")
+
+    # Verify target user exists
+    target = await session.get(User, body.user_id)
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    existing = await session.execute(
+        select(Membership.id).where(
+            Membership.user_id == body.user_id, Membership.channel_id == channel_id
+        )
+    )
     if existing.scalar_one_or_none() is None:
-        session.add(Membership(user_id=user.id, channel_id=channel_id))
+        session.add(Membership(user_id=body.user_id, channel_id=channel_id))
         await session.flush()
-        logger.info("User id=%d joined channel id=%d", user.id, channel_id)
+        logger.info("User id=%d added user id=%d to channel id=%d", user.id, body.user_id, channel_id)
 
     return await _load_channel_for_user(session, channel_id, user.id)
 
