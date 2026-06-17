@@ -42,6 +42,9 @@ interface WebSocketState {
   presence: Record<number, PresenceStatus>;
   /** Subscribe to every inbound frame. Returns an unsubscribe fn. */
   subscribe: (listener: Listener) => () => void;
+  /** Close the current socket and immediately open a fresh one. Causes
+   *  the subscriber task to re-query memberships, picking up new channels. */
+  forceReconnect: () => void;
 }
 
 const WebSocketContext = createContext<WebSocketState | null>(null);
@@ -58,6 +61,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<WSStatus>("closed");
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   const [presence, setPresence] = useState<Record<number, PresenceStatus>>({});
+  const [reconnectKey, setReconnectKey] = useState(0);
+
+  const forceReconnect = useCallback(() => setReconnectKey((k) => k + 1), []);
 
   // Listeners persist across renders. All *connection* state (socket, timers,
   // backoff, stop flag) lives inside each effect run's closure instead — see
@@ -172,11 +178,11 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         socket.close();
       }
     };
-  }, [token, emit]);
+  }, [token, emit, reconnectKey]);
 
   const value = useMemo<WebSocketState>(
-    () => ({ status, connectionEpoch, presence, subscribe }),
-    [status, connectionEpoch, presence, subscribe]
+    () => ({ status, connectionEpoch, presence, subscribe, forceReconnect }),
+    [status, connectionEpoch, presence, subscribe, forceReconnect]
   );
 
   return (

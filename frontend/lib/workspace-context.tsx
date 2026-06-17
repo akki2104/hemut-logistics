@@ -40,7 +40,7 @@ const WorkspaceContext = createContext<WorkspaceState | null>(null);
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const { token } = useAuth();
-  const { subscribe, connectionEpoch } = useWebSocket();
+  const { subscribe, connectionEpoch, forceReconnect } = useWebSocket();
 
   const [channels, setChannels] = useState<Channel[]>([]);
   const [dms, setDms] = useState<DMConversation[]>([]);
@@ -91,9 +91,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     [token]
   );
 
-  // Live badge updates from the message stream.
+  // Live badge updates from the message stream + channel membership events.
   useEffect(() => {
     const unsub = subscribe((event) => {
+      // When we are added to a new channel, force-reconnect the WebSocket so
+      // the subscriber task re-queries memberships and subscribes to the new
+      // channel's Redis topic. connectionEpoch bump then reloads channels.
+      if (event.type === "channel_added") {
+        forceReconnect();
+        return;
+      }
+
       if (event.type !== "message") return;
       const channelId = event.data.channel_id;
       if (channelId === activeRef.current) return; // viewing it → no badge
@@ -123,7 +131,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       if (!known) void refresh();
     });
     return unsub;
-  }, [subscribe, refresh]);
+  }, [subscribe, refresh, forceReconnect]);
 
   return (
     <WorkspaceContext.Provider

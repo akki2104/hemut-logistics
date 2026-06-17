@@ -117,10 +117,16 @@ export interface WSErrorEvent {
   data: { message: string };
 }
 
+export interface WSChannelAddedEvent {
+  type: "channel_added";
+  data: Channel;
+}
+
 export type WSEvent =
   | WSMessageEvent
   | WSPresenceEvent
   | WSAiSummaryEvent
   | WSConnectedEvent
   | WSPongEvent
-  | WSErrorEvent;
+  | WSErrorEvent
+  | WSChannelAddedEvent;

@@ -195,9 +195,10 @@ async def websocket_endpoint(
         # Stamp presence immediately
         await _refresh_presence(redis, user_id)
 
-        # Build topic list; the task creates and owns its pubsub connection
+        # Build topic list; the task creates and owns its pubsub connection.
+        # user:{user_id} receives personal events (e.g. channel_added).
         channel_ids = await _load_channel_ids(user_id)
-        topics = [f"channel:{cid}" for cid in channel_ids]
+        topics = [f"channel:{cid}" for cid in channel_ids] + [f"user:{user_id}"]
 
         # Start background fan-out task (auto-reconnects on Redis blips)
         subscriber = asyncio.create_task(

@@ -8,15 +8,17 @@ The caller is always derived from the JWT (get_current_user); the client
 never supplies a user id, so no query can leak across tenants.
 """
 
+import json
 import logging
 from typing import Annotated
 
+import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
-from app.db import get_session
+from app.db import get_redis, get_session
 from app.models import Channel, Membership, Message, User
 from app.schemas import (
     ActionResponse,
@@ -146,6 +148,7 @@ async def add_member(
     body: AddMemberRequest,
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[aioredis.Redis, Depends(get_redis)],
 ) -> ChannelOut:
     """Add another user to a channel. Caller must already be a member. Idempotent."""
     channel = await session.get(Channel, channel_id)
@@ -180,6 +183,26 @@ async def add_member(
         session.add(Membership(user_id=body.user_id, channel_id=channel_id))
         await session.flush()
         logger.info("User id=%d added user id=%d to channel id=%d", user.id, body.user_id, channel_id)
+
+        # Notify the new member in real-time so their sidebar updates without
+        # a page refresh. Publishes to their personal user:{id} Redis topic;
+        # the WS subscriber task relays it to their open socket (if any).
+        try:
+            payload = json.dumps({
+                "type": "channel_added",
+                "data": {
+                    "id": channel.id,
+                    "name": channel.name,
+                    "description": channel.description,
+                    "is_dm": channel.is_dm,
+                    "created_by": channel.created_by,
+                    "created_at": channel.created_at.isoformat(),
+                    "unread_count": 0,
+                },
+            })
+            await redis.publish(f"user:{body.user_id}", payload)
+        except Exception:
+            logger.warning("Failed to publish channel_added to user_id=%d", body.user_id)
 
     return await _load_channel_for_user(session, channel_id, user.id)
 
