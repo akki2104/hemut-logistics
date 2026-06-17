@@ -187,18 +187,18 @@ two **different** dimensions of cost and are complementary, not redundant:
   is a cache **miss** and a real, billable LLM call. A user in 10 channels can fan out 10 LLM calls in
   seconds despite a warm cache on each. Only a per-user counter (`summary_rate:{user_id}`) caps that.
 
-The deliberate decision for this submission is to **ship the cache** (it removes the bulk of
-duplicate spend with zero UX cost) and to **document the per-user rate limit as the production
-complement** rather than gold-plate it here. If added, the right shape is a Redis `INCR` + `EXPIRE`
-counter enforced **only on the cache-miss path** — so cache hits and empty channels never consume the
-budget and normal interactive use never trips it. Enforcing it earlier (before the cache check) would
-penalize free, cached reads, which is the opposite of the intent.
+Both mechanisms are implemented. The cache (`summary:{channel_id}`, 5-min TTL) collapses repeated
+requests for the same channel to one LLM call. The rate limit (`summary_rate:{user_id}`,
+5 calls/5 min, Redis `INCR`+`EXPIRE`) bounds cost across many channels — a user in 10 channels can
+still fan out 10 cache misses in seconds, so the cache alone isn't enough. Critically, the rate limit
+is enforced **only on the cache-miss path** — cache hits and empty channels never consume the budget,
+and normal interactive use never trips it. Enforcing it earlier would penalize free, cached reads.
 
 ### What would change in production
 - **Deeper grounding:** ref validation against the `shipments` table is already in place (see above);
   the next step is citing the **source messages** behind each claim, not just the shipment refs.
-- **Rate limiting:** a per-user Redis `INCR`/`EXPIRE` counter (see the design note above) enforced on
-  the cache-miss path to cap per-user LLM spend, complementing the per-channel cache.
+- **Deeper rate limiting:** the current 5/user/5min window is conservative; in production tune via
+  a config flag based on observed per-user spend patterns.
 - **Cost & observability:** monitor token spend and latency; tune the context cap and cache TTL.
 - **Refusals:** decline out-of-context queries rather than inventing answers.
 
@@ -271,7 +271,7 @@ Frontend tests are not included (encouraged but not required by the assignment).
   dynamically subscribe on the live connection via inter-task signaling.
 - **Presence has a polling fallback.** Live dots come from `presence_update` frames; the sidebar also
   polls `GET /api/presence` every 20s as a backstop.
-- **Webhooks and rate-limiting are not implemented** (both optional/bonus in the assignment).
+- **Webhooks are not implemented** (optional/bonus in the assignment).
 
 ---
 
