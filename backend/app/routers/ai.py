@@ -83,7 +83,19 @@ async def summarize_channel(
             summary="No recent messages to summarize.",
         )
 
-    # 3) Cache miss → stream over WS. Return the correlation id now.
+    # 3) Cache miss → check per-user rate limit before hitting the LLM.
+    allowed = await ai_service.check_rate_limit(redis, user.id)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Summary rate limit reached ({ai_service.RATE_LIMIT_MAX} LLM summaries "
+                f"per {ai_service.RATE_LIMIT_WINDOW // 60} minutes). "
+                "Try again shortly, or use a cached result."
+            ),
+        )
+
+    # 4) Within budget → stream over WS. Return the correlation id now.
     logger.info(
         "AI summary cache MISS for channel_id=%d — streaming to user_id=%d (request_id=%s)",
         channel_id,
