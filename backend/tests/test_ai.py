@@ -284,6 +284,52 @@ async def test_run_summary_stream_fallback_on_llm_error(mocker) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Per-user rate limiting
+# ---------------------------------------------------------------------------
+
+
+async def test_check_rate_limit_allows_up_to_max(mocker) -> None:
+    """First RATE_LIMIT_MAX calls return True; the next one returns False."""
+    fake_redis = mocker.AsyncMock()
+    # Simulate INCR returning 1, 2, ... up to max+1 on successive calls.
+    fake_redis.incr = mocker.AsyncMock(side_effect=list(range(1, ai.RATE_LIMIT_MAX + 2)))
+
+    for i in range(1, ai.RATE_LIMIT_MAX + 1):
+        result = await ai.check_rate_limit(fake_redis, user_id=42)
+        assert result is True, f"call {i} should be allowed"
+
+    over_budget = await ai.check_rate_limit(fake_redis, user_id=42)
+    assert over_budget is False
+
+    # TTL is only set on the first call (count == 1).
+    fake_redis.expire.assert_awaited_once_with(
+        ai.RATE_LIMIT_KEY.format(user_id=42), ai.RATE_LIMIT_WINDOW
+    )
+
+
+async def test_summarize_rate_limit_returns_429(
+    client: AsyncClient, db_session: AsyncSession, register_user, mocker
+) -> None:
+    """Once the budget is exhausted, the endpoint returns 429 — no LLM call."""
+    headers, user = await register_user(email="rl@hemut.com", display_name="RL")
+    channel_id = await _create_channel(client, headers, "rate-limit-chan")
+
+    db_session.add(
+        Message(channel_id=channel_id, sender_id=user["id"], content="some activity")
+    )
+    await db_session.flush()
+
+    mocker.patch("app.services.ai.get_cached_summary", mocker.AsyncMock(return_value=None))
+    mocker.patch("app.services.ai.check_rate_limit", mocker.AsyncMock(return_value=False))
+    sched = mocker.patch("app.services.ai.schedule_summary")
+
+    resp = await client.post(f"{CHANNELS_URL}/{channel_id}/summarize", headers=headers)
+    assert resp.status_code == 429
+    assert "rate limit" in resp.json()["detail"].lower()
+    sched.assert_not_called()  # LLM must not be triggered when over budget
+
+
+# ---------------------------------------------------------------------------
 # Grounding / anti-hallucination footer
 # ---------------------------------------------------------------------------
 

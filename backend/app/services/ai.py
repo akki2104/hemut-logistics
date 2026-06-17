@@ -48,6 +48,14 @@ FALLBACK_MESSAGE = (
     "⚠️ Summary is unavailable right now. Please try again in a moment."
 )
 
+# Per-user rate limit applied *only* on the billable path (cache misses).
+# Cache hits and empty-channel responses never consume the budget, so normal
+# interactive use never trips it. Complement to the per-channel cache: the
+# cache bounds cost per channel; this counter bounds cost per user.
+RATE_LIMIT_MAX = 5                  # LLM calls allowed per user per window
+RATE_LIMIT_WINDOW = 300             # 5-minute rolling window (matches cache TTL)
+RATE_LIMIT_KEY = "summary_rate:{user_id}"
+
 # Shipment refs the model emits are validated against the DB before we trust
 # them. Word-bounded, case-insensitive — matches the frontend SHIP_PATTERN.
 SHIP_REF_PATTERN = re.compile(r"\bSHIP-\d+\b", re.IGNORECASE)
@@ -133,6 +141,21 @@ async def get_cached_summary(
 ) -> str | None:
     """Return a cached summary if one is warm, else None."""
     return await redis.get(SUMMARY_CACHE_KEY.format(channel_id=channel_id))
+
+
+async def check_rate_limit(redis: aioredis.Redis, user_id: int) -> bool:
+    """Return True if the user is within their billable-summary budget.
+
+    Uses a Redis INCR + EXPIRE counter. The key is created on the first call
+    and expires after RATE_LIMIT_WINDOW seconds, giving a rolling window.
+    Only called on the cache-miss path — cache hits never consume the budget.
+    """
+    key = RATE_LIMIT_KEY.format(user_id=user_id)
+    count = await redis.incr(key)
+    if count == 1:
+        # First call in the window — set the TTL.
+        await redis.expire(key, RATE_LIMIT_WINDOW)
+    return count <= RATE_LIMIT_MAX
 
 
 # ---------------------------------------------------------------------------
