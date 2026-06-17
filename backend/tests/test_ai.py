@@ -39,6 +39,42 @@ class _FakeStream:
             yield c
 
 
+class _FakeResult:
+    """Stands in for a SQLAlchemy Result: .scalars() yields the rows."""
+
+    def __init__(self, rows: list) -> None:
+        self._rows = rows
+
+    def scalars(self):
+        return self._rows
+
+
+class _FakeSession:
+    """Async-context-manager session whose execute() returns fixed rows."""
+
+    def __init__(self, rows: list) -> None:
+        self._rows = rows
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def execute(self, _stmt):
+        return _FakeResult(self._rows)
+
+
+def _shipment(ref: str, status: str = "DELAYED", eta=None) -> SimpleNamespace:
+    return SimpleNamespace(
+        shipment_ref=ref,
+        status=status,
+        origin="Mumbai",
+        destination="Delhi",
+        eta=eta,
+    )
+
+
 async def _create_channel(client: AsyncClient, headers: dict, name: str) -> int:
     resp = await client.post(
         CHANNELS_URL, headers=headers, json={"name": name, "description": None}
@@ -245,6 +281,66 @@ async def test_run_summary_stream_fallback_on_llm_error(mocker) -> None:
     payload = send_mock.await_args_list[0].args[1]
     assert payload["data"]["done"] is True
     assert payload["data"]["chunk"] == ai.FALLBACK_MESSAGE
+
+
+# ---------------------------------------------------------------------------
+# Grounding / anti-hallucination footer
+# ---------------------------------------------------------------------------
+
+
+async def test_grounding_footer_empty_when_no_refs() -> None:
+    """No shipment refs in the summary → no footer, no DB query."""
+    footer = await ai.build_grounding_footer("Nothing logistics-y to cite here.")
+    assert footer == ""
+
+
+async def test_grounding_footer_cites_real_and_flags_unknown(mocker) -> None:
+    """Real refs are cited from the DB; refs not in the DB are flagged."""
+    mocker.patch(
+        "app.services.ai.async_session_factory",
+        return_value=_FakeSession([_shipment("SHIP-001")]),
+    )
+    footer = await ai.build_grounding_footer(
+        "Recap: SHIP-001 is delayed and SHIP-999 is somewhere."
+    )
+    assert "Referenced shipments" in footer
+    # Real shipment cited with status + route
+    assert "`SHIP-001` — DELAYED, Mumbai → Delhi (no ETA)" in footer
+    # Hallucinated ref explicitly flagged, not silently trusted
+    assert "`SHIP-999`" in footer
+    assert "not found" in footer
+
+
+async def test_run_summary_stream_appends_and_caches_grounding_footer(mocker) -> None:
+    """When the summary mentions a shipment, the footer is streamed and cached."""
+    mock_client = mocker.MagicMock()
+    mock_client.chat.completions.create = mocker.AsyncMock(
+        return_value=_FakeStream([_chunk("SHIP-001 is delayed.")])
+    )
+    mocker.patch("app.services.ai._client", mock_client)
+    mocker.patch(
+        "app.services.ai._fetch_recent",
+        mocker.AsyncMock(return_value=("general", [("Alice", "SHIP-001 delayed")])),
+    )
+    mocker.patch(
+        "app.services.ai.build_grounding_footer",
+        mocker.AsyncMock(return_value="\n---\n**Referenced shipments**\n- `SHIP-001` — DELAYED"),
+    )
+    fake_redis = mocker.AsyncMock()
+    mocker.patch("app.services.ai.aioredis.Redis", return_value=fake_redis)
+    send_mock = mocker.AsyncMock()
+    mocker.patch.object(ai.manager, "send_to", send_mock)
+
+    await ai.run_summary_stream(user_id=1, channel_id=7, request_id="rid-g")
+
+    streamed = "".join(
+        c.args[1]["data"]["chunk"] for c in send_mock.await_args_list
+    )
+    assert "Referenced shipments" in streamed
+
+    cache_args = fake_redis.setex.await_args.args
+    assert "SHIP-001 is delayed." in cache_args[2]
+    assert "Referenced shipments" in cache_args[2]
 
 
 # ---------------------------------------------------------------------------

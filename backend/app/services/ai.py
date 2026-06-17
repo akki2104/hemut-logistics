@@ -25,6 +25,7 @@ Provider-agnostic:
 
 import asyncio
 import logging
+import re
 
 import redis.asyncio as aioredis
 from openai import AsyncOpenAI
@@ -33,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import async_session_factory, redis_pool
-from app.models import Channel, Message, User
+from app.models import Channel, Message, Shipment, User
 from app.routers.ws import manager
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,10 @@ STREAM_TIMEOUT_SECONDS = 20         # hard cap on the whole streaming call
 FALLBACK_MESSAGE = (
     "⚠️ Summary is unavailable right now. Please try again in a moment."
 )
+
+# Shipment refs the model emits are validated against the DB before we trust
+# them. Word-bounded, case-insensitive — matches the frontend SHIP_PATTERN.
+SHIP_REF_PATTERN = re.compile(r"\bSHIP-\d+\b", re.IGNORECASE)
 
 # --- LLM system prompt ----------------------------------------------------
 # The chat text is injected as DATA below a clear boundary. The prompt
@@ -131,6 +136,45 @@ async def get_cached_summary(
 
 
 # ---------------------------------------------------------------------------
+# Grounding / anti-hallucination
+# ---------------------------------------------------------------------------
+
+
+async def build_grounding_footer(summary: str) -> str:
+    """Validate shipment refs in the summary against the DB and cite them.
+
+    The #1 LLM failure mode in logistics is a fabricated tracking/shipment id.
+    We extract every SHIP-xxx the model emitted, look them up in the shipments
+    table, and append a markdown footer that (a) cites real shipments with
+    their status/route/ETA and (b) explicitly flags any ref that does NOT
+    exist so the reader doesn't trust a hallucinated id. Returns "" when the
+    summary mentions no shipment refs.
+    """
+    refs = {m.upper() for m in SHIP_REF_PATTERN.findall(summary)}
+    if not refs:
+        return ""
+
+    async with async_session_factory() as session:
+        stmt = select(Shipment).where(Shipment.shipment_ref.in_(refs))
+        found = {s.shipment_ref: s for s in (await session.execute(stmt)).scalars()}
+
+    lines = ["", "---", "**Referenced shipments**", ""]
+    for ref in sorted(refs):
+        shipment = found.get(ref)
+        if shipment is not None:
+            eta = shipment.eta.strftime("%b %d, %H:%M") if shipment.eta else "no ETA"
+            lines.append(
+                f"- `{ref}` — {shipment.status}, "
+                f"{shipment.origin} → {shipment.destination} ({eta})"
+            )
+        else:
+            lines.append(
+                f"- `{ref}` — ⚠️ not found in shipment records; verify before relying on it."
+            )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # WS delivery
 # ---------------------------------------------------------------------------
 
@@ -203,10 +247,16 @@ async def run_summary_stream(
 
         full_summary = "".join(collected).strip()
         if full_summary:
+            # Ground any shipment refs the model emitted against the DB, stream
+            # the citation footer, and cache the full text (summary + footer)
+            # so a warm cache returns the grounded version too.
+            footer = await build_grounding_footer(full_summary)
+            if footer:
+                await _send_chunk(user_id, request_id, "\n" + footer, False)
             await redis.setex(
                 SUMMARY_CACHE_KEY.format(channel_id=channel_id),
                 SUMMARY_CACHE_TTL,
-                full_summary,
+                full_summary + ("\n" + footer if footer else ""),
             )
         await _send_chunk(user_id, request_id, "", True)
         logger.info(
