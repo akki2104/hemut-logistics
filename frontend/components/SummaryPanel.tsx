@@ -29,6 +29,7 @@ export default function SummaryPanel({ channelId }: { channelId: number }) {
   const [loading, setLoading] = useState(false);
   const [cached, setCached] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rateLimited, setRateLimited] = useState(false);
 
   // The request we're currently listening for. Frames for any other id are
   // ignored (e.g. a stale request after switching channels).
@@ -51,6 +52,7 @@ export default function SummaryPanel({ channelId }: { channelId: number }) {
     setOpen(true);
     setLoading(true);
     setError(null);
+    setRateLimited(false);
     setText("");
     setCached(false);
     try {
@@ -67,7 +69,9 @@ export default function SummaryPanel({ channelId }: { channelId: number }) {
         setStreaming(true);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to summarize");
+      const msg = err instanceof Error ? err.message : "Failed to summarize";
+      setError(msg);
+      setRateLimited(msg.toLowerCase().includes("rate limit"));
       setStreaming(false);
     } finally {
       setLoading(false);
@@ -93,6 +97,11 @@ export default function SummaryPanel({ channelId }: { channelId: number }) {
               {cached && (
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[0.7rem] font-medium text-slate-500">
                   cached
+                </span>
+              )}
+              {rateLimited && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[0.7rem] font-medium text-amber-700">
+                  rate limited
                 </span>
               )}
             </div>
@@ -129,10 +138,10 @@ export default function SummaryPanel({ channelId }: { channelId: number }) {
           <div className="border-t border-slate-100 px-4 py-2 text-right">
             <button
               onClick={() => void run()}
-              disabled={loading || streaming}
+              disabled={loading || streaming || rateLimited}
               className="text-xs font-medium text-indigo-600 hover:underline disabled:opacity-50"
             >
-              {streaming ? "Summarizing…" : "Regenerate"}
+              {streaming ? "Summarizing…" : rateLimited ? "Try again later" : "Regenerate"}
             </button>
           </div>
         </div>
