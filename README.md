@@ -167,14 +167,38 @@ blocked* is concrete, real user value tied to genuine pain — not novelty for i
 - **Caching:** `summary:{channel_id}` in Redis with a 5-minute TTL. A warm cache returns
   synchronously in the HTTP body (`cached:true`); an empty channel returns a canned response with
   no LLM call.
+- **Grounding / anti-hallucination:** after the summary is generated, every `SHIP-xxx` ref the model
+  emitted is validated against the `shipments` table. A "Referenced shipments" footer cites the real
+  ones (status · route · ETA) and **explicitly flags any ref that doesn't exist** so a hallucinated id
+  is never silently trusted. The footer is streamed and cached alongside the summary.
 - **Resilience:** the stream runs in a background `asyncio` task (reference held to avoid GC), with
   a 20-second overall timeout and a graceful fallback chunk on any error — the task never raises
   out and never crashes the channel.
 
+### Design note: caching vs. rate limiting (why they're not the same lever)
+A natural question is *"if summaries are already cached, why also rate-limit them?"* They guard
+two **different** dimensions of cost and are complementary, not redundant:
+
+- **The cache bounds cost _per channel_.** `summary:{channel_id}` (5-min TTL) means repeatedly
+  hitting "Catch me up" on the *same* channel collapses to a single LLM call per window. This is the
+  common case and the cache handles it well.
+- **A rate limit bounds cost _per user_.** The cache does nothing against a user who triggers
+  summaries across *many different* channels — each is a distinct `summary:{channel_id}` key, so each
+  is a cache **miss** and a real, billable LLM call. A user in 10 channels can fan out 10 LLM calls in
+  seconds despite a warm cache on each. Only a per-user counter (`summary_rate:{user_id}`) caps that.
+
+The deliberate decision for this submission is to **ship the cache** (it removes the bulk of
+duplicate spend with zero UX cost) and to **document the per-user rate limit as the production
+complement** rather than gold-plate it here. If added, the right shape is a Redis `INCR` + `EXPIRE`
+counter enforced **only on the cache-miss path** — so cache hits and empty channels never consume the
+budget and normal interactive use never trips it. Enforcing it earlier (before the cache check) would
+penalize free, cached reads, which is the opposite of the intent.
+
 ### What would change in production
-- **Grounding / anti-hallucination:** validate any shipment refs the model emits against the
-  `shipments` table before surfacing them; cite the source messages.
-- **Rate limiting:** 1 summary / user / 5 min (Redis counter) to cap cost and abuse.
+- **Deeper grounding:** ref validation against the `shipments` table is already in place (see above);
+  the next step is citing the **source messages** behind each claim, not just the shipment refs.
+- **Rate limiting:** a per-user Redis `INCR`/`EXPIRE` counter (see the design note above) enforced on
+  the cache-miss path to cap per-user LLM spend, complementing the per-channel cache.
 - **Cost & observability:** monitor token spend and latency; tune the context cap and cache TTL.
 - **Refusals:** decline out-of-context queries rather than inventing answers.
 
