@@ -5,8 +5,8 @@
  *
  * Why a hand-rolled XHR layer at all: the assignment wants to see deliberate
  * use of the low-level browser API with full lifecycle handling. So we wire
- * every relevant event — load, error, timeout, abort — and surface a clean,
- * typed Promise so callers don't deal with readyState soup.
+ * every relevant event — load, error, timeout, abort, progress — and surface
+ * a clean, typed Promise so callers don't deal with readyState soup.
  */
 
 import type { AuthResponse, Channel, Message } from "./types";
@@ -44,6 +44,13 @@ interface XhrOptions {
   timeoutMs?: number;
   /** Optional AbortSignal so callers can cancel in-flight requests. */
   signal?: AbortSignal;
+  /**
+   * Called as bytes are received (download) and as the request body is sent
+   * (upload). Fires with a ProgressEvent that carries `loaded`, `total`, and
+   * `lengthComputable`. For our small JSON payloads this rarely fires more
+   * than once, but it demonstrates the full XHR lifecycle is wired.
+   */
+  onProgress?: (event: ProgressEvent) => void;
 }
 
 /**
@@ -58,6 +65,7 @@ export function xhrRequest<T>(path: string, options: XhrOptions = {}): Promise<T
     token,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     signal,
+    onProgress,
   } = options;
 
   return new Promise<T>((resolve, reject) => {
@@ -75,6 +83,13 @@ export function xhrRequest<T>(path: string, options: XhrOptions = {}): Promise<T
     xhr.setRequestHeader("Accept", "application/json");
     if (token) {
       xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+
+    // Download progress (response bytes arriving).
+    if (onProgress) {
+      xhr.onprogress = onProgress;
+      // Upload progress (request body being sent).
+      xhr.upload.onprogress = onProgress;
     }
 
     // Allow external cancellation. We remove the listener once the request
