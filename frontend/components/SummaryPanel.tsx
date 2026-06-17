@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { requestSummary } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useWSListener } from "@/lib/websocket-context";
@@ -112,8 +113,8 @@ export default function SummaryPanel({ channelId }: { channelId: number }) {
             )}
 
             {!error && (text || streaming) && (
-              <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
-                {text}
+              <div className="prose prose-sm prose-slate max-w-none text-slate-800">
+                <ReactMarkdown>{text}</ReactMarkdown>
                 {streaming && (
                   <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-indigo-400 align-middle" />
                 )}
