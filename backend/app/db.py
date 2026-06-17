@@ -17,9 +17,18 @@ engine = create_async_engine(
     max_overflow=20,
 )
 
-# Single shared Redis connection pool — reused by messages, presence, and WS pub/sub
+# Shared pool for regular Redis commands (publish, get, setex, etc.)
 redis_pool = aioredis.ConnectionPool.from_url(
     settings.REDIS_URL, max_connections=20, decode_responses=True
+)
+
+# Dedicated pool for pub/sub connections — socket_timeout=None so listen()
+# blocks indefinitely instead of timing out every few seconds on idle channels.
+redis_pubsub_pool = aioredis.ConnectionPool.from_url(
+    settings.REDIS_URL,
+    max_connections=100,  # one dedicated connection per connected user
+    decode_responses=True,
+    socket_timeout=None,
 )
 
 async_session_factory = async_sessionmaker(

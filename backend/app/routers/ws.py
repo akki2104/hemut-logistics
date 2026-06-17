@@ -21,7 +21,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.auth import decode_access_token
-from app.db import async_session_factory, redis_pool
+from app.db import async_session_factory, redis_pool, redis_pubsub_pool
 from app.models import Membership
 from sqlalchemy import select
 
@@ -121,7 +121,7 @@ async def _subscriber_task(user_id: int, topics: list[str]) -> None:
     while True:
         pubsub: Optional[aioredis.client.PubSub] = None
         try:
-            r: aioredis.Redis = aioredis.Redis(connection_pool=redis_pool)
+            r: aioredis.Redis = aioredis.Redis(connection_pool=redis_pubsub_pool)
             pubsub = r.pubsub()
             if topics:
                 await pubsub.subscribe(*topics)
