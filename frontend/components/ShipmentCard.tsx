@@ -46,7 +46,18 @@ function formatEta(eta: string | null): string {
   });
 }
 
-export default function ShipmentCard({ shipmentRef }: { shipmentRef: string }) {
+export default function ShipmentCard({
+  shipmentRef,
+  showNotFound = false,
+}: {
+  shipmentRef: string;
+  /**
+   * When true, an unknown ref renders a "not found" card instead of nothing.
+   * Inline message unfurls leave this off (degrade silently to plain text);
+   * the /shipment slash command turns it on so the user gets explicit feedback.
+   */
+  showNotFound?: boolean;
+}) {
   const { token } = useAuth();
   const [shipment, setShipment] = useState<Shipment | null>(
     cache.get(shipmentRef) ?? null
@@ -83,7 +94,20 @@ export default function ShipmentCard({ shipmentRef }: { shipmentRef: string }) {
     };
   }, [token, shipmentRef]);
 
-  if (!resolved || !shipment) return null;
+  if (!resolved) return null;
+
+  if (!shipment) {
+    if (!showNotFound) return null;
+    return (
+      <div className="mt-1.5 max-w-md rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+        No shipment found for{" "}
+        <span className="font-mono font-semibold text-slate-700">
+          {shipmentRef}
+        </span>
+        .
+      </div>
+    );
+  }
 
   return (
     <div className="mt-1.5 max-w-md rounded-lg border border-slate-200 bg-slate-50 p-3">
