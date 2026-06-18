@@ -5,7 +5,7 @@ messaging, presence, threaded replies, an inline shipment surface, and two AI fe
 (**"Catch me up"** thread summarization and **"Ask Hemut"** conversational copilot). Built with
 FastAPI + PostgreSQL + Redis on the backend and Next.js 14 (App Router, TypeScript) on the frontend.
 
-> **Loom walkthrough:** _<add link here>_
+> **Loom walkthrough:** https://www.loom.com/share/d601d5e18f60457f91e2edb882c08214
 > **Deployed URL (optional):** _not deployed — run locally per the steps below_
 
 ---
