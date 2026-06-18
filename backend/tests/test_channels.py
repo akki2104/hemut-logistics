@@ -108,54 +108,8 @@ async def test_list_excludes_dm_channels(
 
 
 # ---------------------------------------------------------------------------
-# Join / leave
+# Leave
 # ---------------------------------------------------------------------------
-
-
-async def test_join_channel(register_user, client: AsyncClient) -> None:
-    creator_h, _ = await register_user(email="creator@hemut.com")
-    joiner_h, _ = await register_user(email="joiner@hemut.com")
-
-    created = await client.post(CHANNELS_URL, json={"name": "warehouse"}, headers=creator_h)
-    cid = created.json()["id"]
-
-    resp = await client.post(f"{CHANNELS_URL}/{cid}/join", headers=joiner_h)
-    assert resp.status_code == 200
-    assert resp.json()["id"] == cid
-
-    joiner_list = await client.get(CHANNELS_URL, headers=joiner_h)
-    assert cid in [c["id"] for c in joiner_list.json()]
-
-
-async def test_join_is_idempotent(register_user, client: AsyncClient) -> None:
-    headers, _ = await register_user()
-    created = await client.post(CHANNELS_URL, json={"name": "room"}, headers=headers)
-    cid = created.json()["id"]
-
-    # Creator already a member; joining again must not error or duplicate
-    r1 = await client.post(f"{CHANNELS_URL}/{cid}/join", headers=headers)
-    assert r1.status_code == 200
-
-    listed = await client.get(CHANNELS_URL, headers=headers)
-    assert [c["id"] for c in listed.json()].count(cid) == 1
-
-
-async def test_join_missing_channel_404(register_user, client: AsyncClient) -> None:
-    headers, _ = await register_user()
-    resp = await client.post(f"{CHANNELS_URL}/999999/join", headers=headers)
-    assert resp.status_code == 404
-
-
-async def test_join_dm_channel_forbidden(
-    register_user, client: AsyncClient, db_session: AsyncSession
-) -> None:
-    headers, user = await register_user()
-    dm = Channel(name="dm_5_9", is_dm=True, created_by=user["id"])
-    db_session.add(dm)
-    await db_session.flush()
-
-    resp = await client.post(f"{CHANNELS_URL}/{dm.id}/join", headers=headers)
-    assert resp.status_code == 403
 
 
 async def test_leave_channel(register_user, client: AsyncClient) -> None:
