@@ -5,13 +5,37 @@ exclusion, membership isolation, and auth enforcement. Each test runs inside
 a rolled-back transaction (see conftest).
 """
 
+import json
+from unittest.mock import AsyncMock
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db import get_redis
+from app.main import app
 from app.models import Channel, Membership, Message
 
 CHANNELS_URL = "/api/channels"
+
+
+@pytest.fixture(autouse=True)
+def mock_redis(mocker):
+    """Mock the Redis dependency for every test in this module.
+
+    create_channel and add_member publish channel_added to Redis; mocking it
+    keeps these tests self-contained and lets us assert what was published.
+    """
+    mock = AsyncMock()
+    mock.publish = AsyncMock(return_value=1)
+    mock.aclose = AsyncMock()
+
+    async def _override():
+        yield mock
+
+    app.dependency_overrides[get_redis] = _override
+    yield mock
+    app.dependency_overrides.pop(get_redis, None)
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +77,34 @@ async def test_create_channel_auto_joins_creator(register_user, client: AsyncCli
     listed = await client.get(CHANNELS_URL, headers=headers)
     names = [c["name"] for c in listed.json()]
     assert "dispatch-ops" in names
+
+
+async def test_create_channel_publishes_channel_added_to_creator(
+    register_user, client: AsyncClient, mock_redis
+) -> None:
+    """Creating a channel must notify the creator's own WS so it re-subscribes.
+
+    Regression guard: without this, the creator's subscriber task (whose topic
+    list was captured at connect time) isn't subscribed to the new channel and
+    the echo of their own first message never arrives.
+    """
+    headers, user = await register_user()
+
+    resp = await client.post(
+        CHANNELS_URL,
+        json={"name": "route-west", "description": "west corridor"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    channel_id = resp.json()["id"]
+
+    mock_redis.publish.assert_awaited_once()
+    topic, raw = mock_redis.publish.await_args.args
+    assert topic == f"user:{user['id']}"
+    payload = json.loads(raw)
+    assert payload["type"] == "channel_added"
+    assert payload["data"]["id"] == channel_id
+    assert payload["data"]["is_dm"] is False
 
 
 async def test_create_blank_name_rejected(register_user, client: AsyncClient) -> None:
