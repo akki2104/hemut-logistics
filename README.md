@@ -286,11 +286,9 @@ pytest tests/test_ai.py -v     # AI feature only
 ```
 
 **Test setup notes:**
-- Tests use a **separate `hemut_test` database** to avoid collisions with seed data (`SHIP-001..010`
-  already in the dev `hemut` DB). Create it once: `createdb hemut_test` (or via psql/pgAdmin).
-- `docker-compose.yml` maps host port **5433 → container 5432** to avoid colliding with a native
-  Windows Postgres install. The `DATABASE_URL` in `.env` uses `:5433`; conftest derives the test
-  URL automatically (`hemut_test` at the same host/port/credentials).
+- Tests use **`testcontainers`** — a temporary Postgres 15 container starts automatically at the
+  beginning of the test session and is torn down when it ends. No manual database creation or
+  migration step needed. Docker Desktop just needs to be running.
 - **98 backend tests** across auth, channels, messages, DMs, shipments, users, WebSocket, and AI.
 - Cover happy paths **and** failure paths (auth enforcement, membership isolation, blank input,
   wrong password, unknown email, idempotent DM creation, cache hit/miss, LLM fallback, tool-call
@@ -351,12 +349,14 @@ from a throwaway script) before debugging auth.
 users. Tests that created their own fixtures hit unique-constraint violations because those refs
 already existed in the same DB.
 
-**How we solved it.** Created a dedicated `hemut_test` database. `conftest.py` derives the test
-URL automatically from the production URL (`settings.DATABASE_URL.rsplit("/", 1)[0] + "/hemut_test"`),
-so there's nothing extra to configure. Tests and seed data never share a DB.
+**How we solved it.** Switched to `testcontainers` (`testcontainers[postgres]`). A temporary
+Postgres 15 container starts at the beginning of the test session, schema is applied via
+`Base.metadata.create_all`, all tests run against it, and it is torn down at the end. The
+container is always empty — no seed data — so fixtures never collide. No manual database setup
+is required; Docker running is the only prerequisite.
 
-**Lesson.** Test isolation at the DB level is non-negotiable once a seed exists. Transaction
-rollback is enough for individual test isolation but not for schema/fixture separation.
+**Lesson.** Test isolation at the DB level is non-negotiable once a seed exists. Testcontainers
+is the cleanest solution: zero manual setup, always a clean slate, and works identically in CI.
 
 ---
 
