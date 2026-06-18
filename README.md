@@ -31,7 +31,7 @@ backend and Next.js 14 (App Router, TypeScript) on the frontend.
 - **Docker** (for Postgres 15 + Redis 7)
 - **Python 3.11+**
 - **Node ≥ 18.17** (developed on Node 24 LTS; Next.js 14 requires ≥ 18.17)
-- A **Gemini API key** from [aistudio.google.com](https://aistudio.google.com) (free tier is fine)
+- An **LLM API key** — any OpenAI-compatible provider (Gemini, Groq, OpenRouter, OpenAI); set as `LLM_API_KEY` in `.env`
 
 ### 1. Infrastructure
 ```bash
@@ -41,15 +41,14 @@ docker compose ps           # verify both are healthy
 
 ### 2. Configuration
 ```bash
-cp .env.example .env        # then edit .env and set GEMINI_API_KEY + a real JWT_SECRET
+cp .env.example .env        # then edit .env and set LLM_API_KEY + LLM_BASE_URL + a real JWT_SECRET
 ```
 The backend reads a single root `.env`. The frontend reads `frontend/.env.local`:
 ```bash
 echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > frontend/.env.local
 ```
 
-> **Verify the Gemini model id** before running AI. Model ids change; it's a one-line swap in
-> `.env` (`LLM_MODEL=`). See [AI feature](#ai-feature--catch-me-up).
+> **Verify the model id** before running AI — model ids change per provider. It's a one-line swap in `.env` (`LLM_MODEL=`). See [AI features](#ai-features).
 
 ### 3. Backend
 ```bash
@@ -103,7 +102,7 @@ FastAPI worker (async throughout)
   ├── WS endpoint → one connection per user; a background task subscribes to the
   │                 user's  channel:{id}  topics + a personal  user:{id}  topic and
   │                 relays every Redis event to that user's socket
-  └── AI service → Gemini (streaming) → pushes chunks to the requester's socket ONLY
+  └── AI service → LLM provider (streaming, OpenAI-compatible) → pushes chunks to the requester's socket ONLY
 
 Redis                              PostgreSQL
   ├ pub/sub fan-out across workers   users · channels · memberships · messages · shipments
@@ -529,13 +528,13 @@ roles — it's not incidental, it's load-bearing.
 backend/
   app/
     routers/      auth · channels · messages · dm · shipments · users · ai · ws
-    services/     ai.py (Gemini streaming + cache + fallback)
+    services/     ai.py (LLM streaming + cache + fallback, provider-agnostic)
     models.py     SQLAlchemy models (users, channels, memberships, messages, shipments)
     db.py         async engine + two Redis pools (commands vs pubsub)
     auth.py       JWT + bcrypt + get_current_user dependency
     seed.py       idempotent seed: 5 channels, 3 users (dispatcher/driver/akash), 10 shipments, 81 channel messages, 3 DM conversations (30 DM messages)
   alembic/        async env.py + initial schema migration
-  tests/          82 tests (LLM mocked)
+  tests/          98 tests (LLM mocked)
 frontend/
   app/            App Router pages: login, register, (app)/channel, (app)/dm
   components/     Sidebar, ChannelView, MessageList/Item/Composer, ShipmentCard,
