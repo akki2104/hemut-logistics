@@ -35,11 +35,9 @@ backend and Next.js 14 (App Router, TypeScript) on the frontend.
 
 ### 1. Infrastructure
 ```bash
-docker compose up -d        # starts Postgres (:5432) and Redis (:6379)
+docker compose up -d        # starts Postgres (host :5433 → container :5432) and Redis (:6379)
 docker compose ps           # verify both are healthy
 ```
-> If you have a **local Postgres** already bound to `:5432`, stop it first — the backend will
-> otherwise connect to the wrong instance and fail auth.
 
 ### 2. Configuration
 ```bash
@@ -78,8 +76,8 @@ Three seeded users (all password `password123`):
 
 | Email | Display name |
 |---|---|
-| `alice@hemut.com` | Alice Chen |
-| `bob@hemut.com` | Bob Martinez |
+| `dispatcher@hemut.com` | Priya Dispatcher |
+| `driver@hemut.com` | Ravi Driver |
 | `akash.yadav@hemut.com` | Akash Yadav |
 
 All three belong to all seed channels (`#general`, `#route-east`, `#warehouse-mumbai`,
@@ -535,7 +533,7 @@ backend/
     models.py     SQLAlchemy models (users, channels, memberships, messages, shipments)
     db.py         async engine + two Redis pools (commands vs pubsub)
     auth.py       JWT + bcrypt + get_current_user dependency
-    seed.py       idempotent seed: 5 channels, 3 users (alice/bob/akash), 10 shipments, 67 channel messages, 3 DM conversations
+    seed.py       idempotent seed: 5 channels, 3 users (dispatcher/driver/akash), 10 shipments, 81 channel messages, 3 DM conversations (30 DM messages)
   alembic/        async env.py + initial schema migration
   tests/          82 tests (LLM mocked)
 frontend/
