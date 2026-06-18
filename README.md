@@ -74,17 +74,19 @@ npm run dev                     # http://localhost:3000
 ```
 
 ### 5. Log in
-Two seeded users (both password `password123`):
+Three seeded users (all password `password123`):
 
-| Email | Role |
+| Email | Display name |
 |---|---|
-| `dispatcher@hemut.com` | dispatcher |
-| `driver@hemut.com` | driver |
+| `alice@hemut.com` | Alice Chen |
+| `bob@hemut.com` | Bob Martinez |
+| `akash.yadav@hemut.com` | Akash Yadav |
 
-Both belong to all seed channels (`#general`, `#route-east`, `#warehouse-mumbai`,
-`#dispatch-ops`, `#delays`). Open two browsers (or one normal + one incognito), log in as each,
-and you can watch messages, presence, and DMs update in real time. Type a message containing
-`SHIP-001`..`SHIP-010` to render an inline shipment card.
+All three belong to all seed channels (`#general`, `#route-east`, `#warehouse-mumbai`,
+`#dispatch-ops`, `#delays`) and have pre-seeded DM conversations between each pair. Open two
+browsers (or one normal + one incognito), log in as different users, and you can watch messages,
+presence, and DMs update in real time. Type a message containing `SHIP-001`..`SHIP-010` to render
+an inline shipment card.
 
 ---
 
@@ -533,7 +535,7 @@ backend/
     models.py     SQLAlchemy models (users, channels, memberships, messages, shipments)
     db.py         async engine + two Redis pools (commands vs pubsub)
     auth.py       JWT + bcrypt + get_current_user dependency
-    seed.py       idempotent seed: 5 channels, 2 users, 10 shipments
+    seed.py       idempotent seed: 5 channels, 3 users (alice/bob/akash), 10 shipments, 67 channel messages, 3 DM conversations
   alembic/        async env.py + initial schema migration
   tests/          82 tests (LLM mocked)
 frontend/
