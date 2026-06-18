@@ -40,16 +40,20 @@ export default function MessageItem({
   message,
   showHeader,
   isOwn,
+  onReply,
 }: {
   message: Message;
   /** False when this message is grouped under the previous sender's header. */
   showHeader: boolean;
   isOwn: boolean;
+  /** Called when the user clicks Reply — opens the thread panel for this message. */
+  onReply?: (message: Message) => void;
 }) {
   const refs = extractShipmentRefs(message.content);
+  const replyCount = message.reply_count ?? 0;
 
   return (
-    <div className={`flex gap-3 px-4 ${showHeader ? "mt-3" : "mt-0.5"}`}>
+    <div className={`group flex gap-3 px-4 ${showHeader ? "mt-3" : "mt-0.5"}`}>
       {/* Avatar column (only on the first message of a group) */}
       <div className="w-9 shrink-0">
         {showHeader && (
@@ -80,6 +84,27 @@ export default function MessageItem({
         {refs.map((ref) => (
           <ShipmentCard key={ref} shipmentRef={ref} />
         ))}
+
+        {/* Reply button + count — only shown on root messages */}
+        {!message.parent_id && onReply && (
+          <div className="mt-1 flex items-center gap-2">
+            {replyCount > 0 && (
+              <button
+                onClick={() => onReply(message)}
+                className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
+              >
+                <span>💬</span>
+                {replyCount} {replyCount === 1 ? "reply" : "replies"}
+              </button>
+            )}
+            <button
+              onClick={() => onReply(message)}
+              className="hidden rounded px-1.5 py-0.5 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-600 group-hover:block"
+            >
+              Reply
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -85,11 +85,12 @@ export function markChannelRead(
 export function getMessages(
   token: string,
   channelId: number,
-  opts: { beforeId?: number; afterId?: number; limit?: number } = {}
+  opts: { beforeId?: number; afterId?: number; parentId?: number; limit?: number } = {}
 ): Promise<MessageList> {
   const params = new URLSearchParams();
   if (opts.beforeId != null) params.set("before_id", String(opts.beforeId));
   if (opts.afterId != null) params.set("after_id", String(opts.afterId));
+  if (opts.parentId != null) params.set("parent_id", String(opts.parentId));
   params.set("limit", String(opts.limit ?? 50));
   return apiFetch<MessageList>(
     `/api/channels/${channelId}/messages?${params.toString()}`,

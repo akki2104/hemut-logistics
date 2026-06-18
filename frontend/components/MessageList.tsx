@@ -10,10 +10,12 @@ export default function MessageList({
   messages,
   currentUserId,
   loading,
+  onReply,
 }: {
   messages: Message[];
   currentUserId: number;
   loading: boolean;
+  onReply?: (message: Message) => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -57,6 +59,7 @@ export default function MessageList({
             message={m}
             showHeader={Boolean(showHeader)}
             isOwn={m.sender_id === currentUserId}
+            onReply={onReply}
           />
         );
       })}

@@ -10,6 +10,7 @@ import MessageList from "./MessageList";
 import MessageComposer from "./MessageComposer";
 import SummaryPanel from "./SummaryPanel";
 import AskPanel from "./AskPanel";
+import ThreadPanel from "./ThreadPanel";
 import PresenceDot from "./PresenceDot";
 
 const PRESENCE_POLL_MS = 20_000;
@@ -137,47 +138,61 @@ export default function ChannelView({ channelId }: { channelId: number }) {
     : `Message #${channel?.name ?? ""}`;
 
   const [openPanel, setOpenPanel] = useState<"ask" | "summary" | null>(null);
+  const [openThread, setOpenThread] = useState<Message | null>(null);
 
   return (
-    <div className="flex min-h-0 flex-1 min-w-0 flex-col">
-      {/* Header */}
-      <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          {dm ? (
-            <PresenceDot status={peerLiveStatus} />
-          ) : (
-            <span className="text-slate-400">#</span>
-          )}
-          <h1 className="truncate text-base font-bold text-slate-900">{title}</h1>
-          {channel?.description && (
-            <span className="truncate text-sm text-slate-400">
-              {channel.description}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <AskPanel
-            channelId={channelId}
-            open={openPanel === "ask"}
-            onOpen={() => setOpenPanel("ask")}
-            onClose={() => setOpenPanel(null)}
-          />
-          <SummaryPanel
-            channelId={channelId}
-            open={openPanel === "summary"}
-            onOpen={() => setOpenPanel("summary")}
-            onClose={() => setOpenPanel(null)}
-          />
-        </div>
-      </header>
+    <div className="flex min-h-0 flex-1 min-w-0">
+      {/* Main column: header + messages + composer */}
+      <div className="flex min-h-0 flex-1 min-w-0 flex-col">
+        <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            {dm ? (
+              <PresenceDot status={peerLiveStatus} />
+            ) : (
+              <span className="text-slate-400">#</span>
+            )}
+            <h1 className="truncate text-base font-bold text-slate-900">{title}</h1>
+            {channel?.description && (
+              <span className="truncate text-sm text-slate-400">
+                {channel.description}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <AskPanel
+              channelId={channelId}
+              open={openPanel === "ask"}
+              onOpen={() => setOpenPanel("ask")}
+              onClose={() => setOpenPanel(null)}
+            />
+            <SummaryPanel
+              channelId={channelId}
+              open={openPanel === "summary"}
+              onOpen={() => setOpenPanel("summary")}
+              onClose={() => setOpenPanel(null)}
+            />
+          </div>
+        </header>
 
-      <MessageList
-        messages={messages}
-        currentUserId={user?.id ?? -1}
-        loading={loading}
+        <MessageList
+          messages={messages}
+          currentUserId={user?.id ?? -1}
+          loading={loading}
+          onReply={(msg) => {
+            setOpenThread(msg);
+            setOpenPanel(null); // close Ask/Summary when opening a thread
+          }}
+        />
+
+        <MessageComposer channelId={channelId} placeholder={placeholder} />
+      </div>
+
+      {/* Thread panel slides in as a right rail */}
+      <ThreadPanel
+        channelId={channelId}
+        rootMessage={openThread}
+        onClose={() => setOpenThread(null)}
       />
-
-      <MessageComposer channelId={channelId} placeholder={placeholder} />
     </div>
   );
 }
