@@ -6,7 +6,11 @@ messaging, presence, threaded replies, an inline shipment surface, and two AI fe
 FastAPI + PostgreSQL + Redis on the backend and Next.js 14 (App Router, TypeScript) on the frontend.
 
 > **Loom walkthrough:** https://www.loom.com/share/d601d5e18f60457f91e2edb882c08214
-> **Deployed URL (optional):** _not deployed — run locally per the steps below_
+> **Frontend:** https://hemut-logistics.vercel.app/ — **Backend:** https://hemut-logistics.onrender.com/
+>
+> ⚠️ **Recommended: run locally** for the best experience. Render and Vercel free tiers spin down on inactivity — the first request after a cold start can take 30–60 s. Local setup (Docker + uvicorn + `npm run dev`) has no such delay.
+>
+> ⚠️ **One session per user.** The server enforces a single WebSocket connection per user — opening the same account in two browser windows causes the connections to evict each other and the status pill will flap between "Connected" and "Connecting". Use a different account in each window when testing real-time features.
 
 ---
 
