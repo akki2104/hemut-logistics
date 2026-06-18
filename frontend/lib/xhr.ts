@@ -195,11 +195,14 @@ export function xhrSendMessage(
   content: string,
   token: string,
   signal?: AbortSignal,
-  onProgress?: (event: ProgressEvent) => void
+  onProgress?: (event: ProgressEvent) => void,
+  parentId?: number
 ): Promise<Message> {
+  const body: { content: string; parent_id?: number } = { content };
+  if (parentId != null) body.parent_id = parentId;
   return xhrRequest<Message>(`/api/channels/${channelId}/messages`, {
     method: "POST",
-    body: { content },
+    body,
     token,
     signal,
     onProgress,

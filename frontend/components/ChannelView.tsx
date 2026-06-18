@@ -10,6 +10,7 @@ import MessageList from "./MessageList";
 import MessageComposer from "./MessageComposer";
 import SummaryPanel from "./SummaryPanel";
 import AskPanel from "./AskPanel";
+import ThreadPanel from "./ThreadPanel";
 import PresenceDot from "./PresenceDot";
 
 const PRESENCE_POLL_MS = 20_000;
@@ -86,7 +87,18 @@ export default function ChannelView({ channelId }: { channelId: number }) {
 
   // Live messages for THIS channel.
   useWSListener((event) => {
-    if (event.type === "message" && event.data.channel_id === channelId) {
+    if (event.type !== "message" || event.data.channel_id !== channelId) return;
+    if (event.data.parent_id) {
+      // A reply arrived — increment the root message's reply_count in place.
+      // Don't add the reply to the timeline (it lives in ThreadPanel).
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === event.data.parent_id
+            ? { ...m, reply_count: (m.reply_count ?? 0) + 1 }
+            : m
+        )
+      );
+    } else {
       merge([event.data]);
     }
   });
@@ -137,47 +149,61 @@ export default function ChannelView({ channelId }: { channelId: number }) {
     : `Message #${channel?.name ?? ""}`;
 
   const [openPanel, setOpenPanel] = useState<"ask" | "summary" | null>(null);
+  const [openThread, setOpenThread] = useState<Message | null>(null);
 
   return (
-    <div className="flex min-h-0 flex-1 min-w-0 flex-col">
-      {/* Header */}
-      <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          {dm ? (
-            <PresenceDot status={peerLiveStatus} />
-          ) : (
-            <span className="text-slate-400">#</span>
-          )}
-          <h1 className="truncate text-base font-bold text-slate-900">{title}</h1>
-          {channel?.description && (
-            <span className="truncate text-sm text-slate-400">
-              {channel.description}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <AskPanel
-            channelId={channelId}
-            open={openPanel === "ask"}
-            onOpen={() => setOpenPanel("ask")}
-            onClose={() => setOpenPanel(null)}
-          />
-          <SummaryPanel
-            channelId={channelId}
-            open={openPanel === "summary"}
-            onOpen={() => setOpenPanel("summary")}
-            onClose={() => setOpenPanel(null)}
-          />
-        </div>
-      </header>
+    <div className="flex min-h-0 flex-1 min-w-0">
+      {/* Main column: header + messages + composer */}
+      <div className="flex min-h-0 flex-1 min-w-0 flex-col">
+        <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            {dm ? (
+              <PresenceDot status={peerLiveStatus} />
+            ) : (
+              <span className="text-slate-400">#</span>
+            )}
+            <h1 className="truncate text-base font-bold text-slate-900">{title}</h1>
+            {channel?.description && (
+              <span className="truncate text-sm text-slate-400">
+                {channel.description}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <AskPanel
+              channelId={channelId}
+              open={openPanel === "ask"}
+              onOpen={() => setOpenPanel("ask")}
+              onClose={() => setOpenPanel(null)}
+            />
+            <SummaryPanel
+              channelId={channelId}
+              open={openPanel === "summary"}
+              onOpen={() => setOpenPanel("summary")}
+              onClose={() => setOpenPanel(null)}
+            />
+          </div>
+        </header>
 
-      <MessageList
-        messages={messages}
-        currentUserId={user?.id ?? -1}
-        loading={loading}
+        <MessageList
+          messages={messages}
+          currentUserId={user?.id ?? -1}
+          loading={loading}
+          onReply={(msg) => {
+            setOpenThread(msg);
+            setOpenPanel(null); // close Ask/Summary when opening a thread
+          }}
+        />
+
+        <MessageComposer channelId={channelId} placeholder={placeholder} />
+      </div>
+
+      {/* Thread panel slides in as a right rail */}
+      <ThreadPanel
+        channelId={channelId}
+        rootMessage={openThread}
+        onClose={() => setOpenThread(null)}
       />
-
-      <MessageComposer channelId={channelId} placeholder={placeholder} />
     </div>
   );
 }

@@ -34,6 +34,8 @@ export interface Message {
   sender_name: string;
   content: string;
   created_at: string;
+  parent_id?: number | null;   // null/undefined = root message
+  reply_count?: number;        // populated on root messages in channel history
 }
 
 export interface MessageList {

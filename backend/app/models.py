@@ -76,6 +76,8 @@ class Message(Base):
         # Composite index powers cursor pagination (WHERE channel_id=? AND id < ?)
         Index("idx_messages_channel_id", "channel_id", "id"),
         Index("idx_messages_channel_created_at", "channel_id", "created_at"),
+        # Index for fast thread fetch (WHERE parent_id = ?)
+        Index("idx_messages_parent_id", "parent_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -88,6 +90,10 @@ class Message(Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    # NULL = root message; set to parent message id for thread replies
+    parent_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("messages.id"), nullable=True
+    )
 
 
 class Shipment(Base):

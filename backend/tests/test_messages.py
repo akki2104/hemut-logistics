@@ -235,3 +235,139 @@ async def test_get_messages_non_member_forbidden(client: AsyncClient, register_u
 
     resp = await client.get(_msgs_url(cid), headers=bob_h)
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Thread replies
+# ---------------------------------------------------------------------------
+
+
+async def test_post_reply_success(client: AsyncClient, register_user) -> None:
+    """Posting with parent_id creates a reply linked to the root message."""
+    headers, user = await register_user()
+    ch = await client.post(CHANNELS_URL, json={"name": "threads"}, headers=headers)
+    cid = ch.json()["id"]
+
+    root = await client.post(_msgs_url(cid), json={"content": "root message"}, headers=headers)
+    root_id = root.json()["id"]
+
+    resp = await client.post(
+        _msgs_url(cid),
+        json={"content": "a reply", "parent_id": root_id},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["parent_id"] == root_id
+    assert body["content"] == "a reply"
+
+
+async def test_get_thread_replies(client: AsyncClient, register_user) -> None:
+    """GET ?parent_id=N returns only replies to that message."""
+    headers, _ = await register_user()
+    ch = await client.post(CHANNELS_URL, json={"name": "thread-fetch"}, headers=headers)
+    cid = ch.json()["id"]
+
+    root = await client.post(_msgs_url(cid), json={"content": "root"}, headers=headers)
+    root_id = root.json()["id"]
+
+    # Post a second root message (should NOT appear in the thread)
+    other = await client.post(_msgs_url(cid), json={"content": "other root"}, headers=headers)
+    other_id = other.json()["id"]
+
+    for i in range(3):
+        await client.post(
+            _msgs_url(cid),
+            json={"content": f"reply {i}", "parent_id": root_id},
+            headers=headers,
+        )
+
+    resp = await client.get(_msgs_url(cid), params={"parent_id": root_id}, headers=headers)
+    assert resp.status_code == 200
+    msgs = resp.json()["messages"]
+    assert len(msgs) == 3
+    assert all(m["parent_id"] == root_id for m in msgs)
+    # Other root message must not be in thread results
+    assert all(m["id"] != other_id for m in msgs)
+
+
+async def test_channel_timeline_excludes_replies(client: AsyncClient, register_user) -> None:
+    """Default GET (no parent_id) returns only root messages, not replies."""
+    headers, _ = await register_user()
+    ch = await client.post(CHANNELS_URL, json={"name": "root-only"}, headers=headers)
+    cid = ch.json()["id"]
+
+    root = await client.post(_msgs_url(cid), json={"content": "root"}, headers=headers)
+    root_id = root.json()["id"]
+
+    await client.post(
+        _msgs_url(cid),
+        json={"content": "reply", "parent_id": root_id},
+        headers=headers,
+    )
+
+    resp = await client.get(_msgs_url(cid), headers=headers)
+    msgs = resp.json()["messages"]
+    assert len(msgs) == 1
+    assert msgs[0]["id"] == root_id
+
+
+async def test_reply_count_on_root_message(client: AsyncClient, register_user) -> None:
+    """Root messages in the channel timeline carry an accurate reply_count."""
+    headers, _ = await register_user()
+    ch = await client.post(CHANNELS_URL, json={"name": "counts"}, headers=headers)
+    cid = ch.json()["id"]
+
+    root = await client.post(_msgs_url(cid), json={"content": "root"}, headers=headers)
+    root_id = root.json()["id"]
+
+    for _ in range(2):
+        await client.post(
+            _msgs_url(cid),
+            json={"content": "reply", "parent_id": root_id},
+            headers=headers,
+        )
+
+    resp = await client.get(_msgs_url(cid), headers=headers)
+    msg = next(m for m in resp.json()["messages"] if m["id"] == root_id)
+    assert msg["reply_count"] == 2
+
+
+async def test_reply_to_reply_rejected(client: AsyncClient, register_user) -> None:
+    """One level of threading only — replying to a reply returns 400."""
+    headers, _ = await register_user()
+    ch = await client.post(CHANNELS_URL, json={"name": "nested"}, headers=headers)
+    cid = ch.json()["id"]
+
+    root = await client.post(_msgs_url(cid), json={"content": "root"}, headers=headers)
+    root_id = root.json()["id"]
+    reply = await client.post(
+        _msgs_url(cid), json={"content": "reply", "parent_id": root_id}, headers=headers
+    )
+    reply_id = reply.json()["id"]
+
+    resp = await client.post(
+        _msgs_url(cid),
+        json={"content": "nested", "parent_id": reply_id},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+async def test_reply_cross_channel_rejected(client: AsyncClient, register_user) -> None:
+    """parent_id pointing to a message in a different channel returns 400."""
+    headers, _ = await register_user()
+    ch1 = await client.post(CHANNELS_URL, json={"name": "chan1"}, headers=headers)
+    ch2 = await client.post(CHANNELS_URL, json={"name": "chan2"}, headers=headers)
+    cid1, cid2 = ch1.json()["id"], ch2.json()["id"]
+
+    root = await client.post(_msgs_url(cid1), json={"content": "root"}, headers=headers)
+    root_id = root.json()["id"]
+
+    # Try to reply in channel 2 to a message from channel 1
+    resp = await client.post(
+        _msgs_url(cid2),
+        json={"content": "reply", "parent_id": root_id},
+        headers=headers,
+    )
+    assert resp.status_code == 400

@@ -112,6 +112,7 @@ class ActionResponse(BaseModel):
 
 class MessageCreate(BaseModel):
     content: str
+    parent_id: Optional[int] = None  # set to reply within a thread
 
     @field_validator("content")
     @classmethod
@@ -130,6 +131,8 @@ class MessageOut(BaseModel):
     sender_name: str  # denormalized from users table at query time
     content: str
     created_at: datetime
+    parent_id: Optional[int] = None   # None for root messages
+    reply_count: int = 0              # populated only on root messages in channel history
 
 
 class MessageListOut(BaseModel):

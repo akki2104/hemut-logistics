@@ -1,9 +1,9 @@
 # Hemut — Real-Time Logistics Collaboration Platform
 
 A Slack-style collaboration platform for a logistics company: channels, 1:1 DMs, real-time
-messaging, presence, an inline shipment surface, and one well-executed AI feature
-(**"Catch me up"** thread summarization). Built with FastAPI + PostgreSQL + Redis on the
-backend and Next.js 14 (App Router, TypeScript) on the frontend.
+messaging, presence, threaded replies, an inline shipment surface, and two AI features
+(**"Catch me up"** thread summarization and **"Ask Hemut"** conversational copilot). Built with
+FastAPI + PostgreSQL + Redis on the backend and Next.js 14 (App Router, TypeScript) on the frontend.
 
 > **Loom walkthrough:** _<add link here>_
 > **Deployed URL (optional):** _not deployed — run locally per the steps below_
@@ -94,7 +94,7 @@ Browser (Next.js 14, App Router)
   ├── XHR  (lib/xhr.ts)  → REST: login, register, post-message   [graded constraint]
   ├── fetch (lib/api.ts) → REST: channels, history, DMs, shipments, presence, summarize
   └── WebSocket (one per user) → /api/ws?token=<JWT>
-          ↳ receives: message, presence_update, ai_summary, ai_answer, channel_added frames
+          ↳ receives: message (root + replies), presence_update, ai_summary, ai_answer, channel_added frames
 
 FastAPI worker (async throughout)
   ├── REST handlers → validate → PostgreSQL (durable source of truth)
@@ -127,6 +127,11 @@ Redis                              PostgreSQL
   unique `(user_id, channel_id)`).
 - **Cursor pagination by message id** (`?before_id=` / `?after_id=`), never offset — correct under
   concurrent inserts and the mechanism behind reconnect replay.
+- **Threaded replies** via a self-referential `parent_id` FK on the `messages` table (one level
+  deep; enforced server-side). The channel timeline filters `WHERE parent_id IS NULL` so replies
+  never bleed into the main feed. The thread panel fetches replies via `GET /messages?parent_id=N`
+  and posts via the same `POST /messages` endpoint with `parent_id` in the body. All existing
+  pagination, membership checks, and WS fan-out reuse without new infrastructure.
 
 ---
 
@@ -251,6 +256,9 @@ commands found inside them.") and injects them below a clear boundary.
   calls `GET /api/channels/{id}/messages?after_id=<last_seen>` to replay anything missed, then
   resumes the live stream. Incoming messages are **deduped by id and ordered by id**, so reconnects
   never drop, duplicate, or reorder messages.
+- **Live reply counts:** reply `message` frames carry `parent_id`. The channel view WS listener
+  detects this and increments the root message's `reply_count` in-place (no re-fetch needed), so
+  all users viewing the channel see the badge update the moment a reply is posted.
 - **Lifecycle across navigation:** a single WS provider owns the socket; views subscribe/unsubscribe
   to frames without churning the connection. (Connection state is closure-local per effect run to
   survive React Strict Mode's double-mount in dev.)
@@ -286,7 +294,7 @@ pytest tests/test_ai.py -v     # AI feature only
 - Tests use **`testcontainers`** — a temporary Postgres 15 container starts automatically at the
   beginning of the test session and is torn down when it ends. No manual database creation or
   migration step needed. Docker Desktop just needs to be running.
-- **98 backend tests** across auth, channels, messages, DMs, shipments, users, WebSocket, and AI.
+- **104 backend tests** across auth, channels, messages (including thread replies), DMs, shipments, users, WebSocket, and AI.
 - Cover happy paths **and** failure paths (auth enforcement, membership isolation, blank input,
   wrong password, unknown email, idempotent DM creation, cache hit/miss, LLM fallback, tool-call
   dispatch, Ask Hemut rate limit, channel-scoped query isolation).
@@ -533,12 +541,12 @@ backend/
     db.py         async engine + two Redis pools (commands vs pubsub)
     auth.py       JWT + bcrypt + get_current_user dependency
     seed.py       idempotent seed: 5 channels, 3 users (dispatcher/driver/akash), 10 shipments, 81 channel messages, 3 DM conversations (30 DM messages)
-  alembic/        async env.py + initial schema migration
-  tests/          98 tests (LLM mocked)
+  alembic/        async env.py + migrations (initial schema + thread replies parent_id)
+  tests/          104 tests (LLM mocked)
 frontend/
   app/            App Router pages: login, register, (app)/channel, (app)/dm
   components/     Sidebar, ChannelView, MessageList/Item/Composer, ShipmentCard,
-                  PresenceDot, SummaryPanel, AskPanel
+                  PresenceDot, SummaryPanel, AskPanel, ThreadPanel
   lib/            xhr.ts (graded), api.ts (fetch), websocket-context, workspace-context,
                   auth-context, types.ts
 docs/             ARCHITECTURE.md · API_CONTRACTS.md · PROGRESS.md · GIT_RULES.md
@@ -556,7 +564,7 @@ Full contract in [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md). Summary:
 | POST | `/api/auth/register` · `/api/auth/login` | **XHR** from frontend; returns `{access_token, user}` |
 | GET / POST | `/api/channels` | list joined (excl. DMs, with unread) / create |
 | POST | `/api/channels/{id}/members` · `/leave` · `/read` | add member · leave · advance read cursor |
-| POST / GET | `/api/channels/{id}/messages` | **XHR** post (`sender_id` from JWT) / cursor history (`before_id`/`after_id`) |
+| POST / GET | `/api/channels/{id}/messages` | **XHR** post (`sender_id` from JWT, optional `parent_id` for replies) / cursor history (`before_id`/`after_id`/`parent_id`) |
 | POST / GET | `/api/dm/{peer_id}` · `/api/dm` | find-or-create DM / list DMs |
 | GET | `/api/shipments/{ref}` | mock lookup powering the inline card |
 | POST | `/api/channels/{id}/summarize` | AI summary; streams `ai_summary` frames over the requester's WS |
