@@ -198,8 +198,8 @@ REDIS_URL=redis://localhost:6379
 JWT_SECRET=change-me
 JWT_ALGORITHM=HS256
 JWT_EXPIRE_DAYS=7
-GEMINI_API_KEY=from_aistudio_google_com
-GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+LLM_API_KEY=your-llm-api-key
+LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
 LLM_MODEL=gemini-flash-latest   # VERIFY current model id when wiring
 # frontend/.env.local:
 # NEXT_PUBLIC_API_URL=http://localhost:8000
@@ -211,7 +211,7 @@ LLM_MODEL=gemini-flash-latest   # VERIFY current model id when wiring
 |---|---|---|
 | FastAPI | async-native, WS built-in | Flask/Django (more glue) |
 | Next.js 14 App Router | routing + client/server split | React Native (two unfamiliar at once) |
-| Gemini via OpenAI API | provider-agnostic, free tier | native Gemini SDK (lock-in) |
+| OpenAI-compatible LLM endpoint | provider-agnostic (`LLM_API_KEY`/`LLM_BASE_URL`/`LLM_MODEL`); Gemini/Groq/OpenRouter are a `.env` swap | native Gemini SDK (lock-in) |
 | Alembic from start | "clean migrations" = Strong; cheap once wired | create_all (no migration story) |
 | DMs as virtual channels | zero new message-path code | separate dm table (duplicate logic) |
 | One WS per user | clean lifecycle, membership filter | per-channel sockets (N sockets/user) |

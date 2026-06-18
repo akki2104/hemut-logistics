@@ -68,7 +68,7 @@ npm run build
 
 ## Environment Variables
 
-Single root `.env` (see `docs/ARCHITECTURE.md` for the template). Backend reads `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `JWT_ALGORITHM`, `JWT_EXPIRE_DAYS`, `GEMINI_API_KEY`, `GEMINI_BASE_URL`, `LLM_MODEL`. Frontend reads `NEXT_PUBLIC_API_URL` from `frontend/.env.local`. **Verify the current Gemini Flash model id when wiring** — model ids change; keep it in `.env` so it's a one-line swap.
+Single root `.env` (see `docs/ARCHITECTURE.md` for the template). Backend reads `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `JWT_ALGORITHM`, `JWT_EXPIRE_DAYS`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`. Frontend reads `NEXT_PUBLIC_API_URL` from `frontend/.env.local`. Provider-agnostic — model ids change; keep them in `.env` so it's a one-line swap.
 
 ## Working With This Repo (for Claude Code sessions)
 

@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_DAYS: int = 7
 
-    GEMINI_API_KEY: str
-    GEMINI_BASE_URL: str
+    LLM_API_KEY: str
+    LLM_BASE_URL: str
     LLM_MODEL: str
 
 
