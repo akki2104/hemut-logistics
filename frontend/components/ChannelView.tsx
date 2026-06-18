@@ -87,7 +87,18 @@ export default function ChannelView({ channelId }: { channelId: number }) {
 
   // Live messages for THIS channel.
   useWSListener((event) => {
-    if (event.type === "message" && event.data.channel_id === channelId) {
+    if (event.type !== "message" || event.data.channel_id !== channelId) return;
+    if (event.data.parent_id) {
+      // A reply arrived — increment the root message's reply_count in place.
+      // Don't add the reply to the timeline (it lives in ThreadPanel).
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === event.data.parent_id
+            ? { ...m, reply_count: (m.reply_count ?? 0) + 1 }
+            : m
+        )
+      );
+    } else {
       merge([event.data]);
     }
   });
