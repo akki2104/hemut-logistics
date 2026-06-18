@@ -71,6 +71,9 @@ async def test_post_message_success(
     headers, user = await register_user()
     ch = await client.post(CHANNELS_URL, json={"name": "chat"}, headers=headers)
     cid = ch.json()["id"]
+    # create_channel publishes channel_added to the creator; ignore that here
+    # so the assertions below isolate the message publish.
+    mock_redis.publish.reset_mock()
 
     resp = await client.post(_msgs_url(cid), json={"content": "hello world"}, headers=headers)
 

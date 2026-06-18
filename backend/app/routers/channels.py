@@ -106,6 +106,7 @@ async def create_channel(
     body: ChannelCreate,
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[aioredis.Redis, Depends(get_redis)],
 ) -> ChannelOut:
     """Create a public channel and auto-join the creator.
 
@@ -137,6 +138,31 @@ async def create_channel(
     await session.flush()
 
     logger.info("User id=%d created channel id=%d name=%s", user.id, channel.id, channel.name)
+
+    # Notify the creator's own WebSocket so it re-subscribes to the new
+    # channel's Redis topic. The subscriber task captured its topic list at
+    # connect time — before this channel existed — so without this signal the
+    # creator's socket isn't subscribed to channel:{id} and the echo of their
+    # own first message never arrives (they'd see "No messages yet" until a
+    # manual refresh). channel_added → forceReconnect → fresh _load_channel_ids().
+    # Same pattern as add_member (for the added user) and the DM router.
+    try:
+        payload = json.dumps({
+            "type": "channel_added",
+            "data": {
+                "id": channel.id,
+                "name": channel.name,
+                "description": channel.description,
+                "is_dm": channel.is_dm,
+                "created_by": channel.created_by,
+                "created_at": channel.created_at.isoformat(),
+                "unread_count": 0,
+            },
+        })
+        await redis.publish(f"user:{user.id}", payload)
+    except Exception:
+        logger.warning("Failed to publish channel_added to creator user_id=%d", user.id)
+
     out = ChannelOut.model_validate(channel)
     out.unread_count = 0
     return out
