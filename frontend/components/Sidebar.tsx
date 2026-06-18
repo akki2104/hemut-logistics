@@ -20,6 +20,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
 
+  const [collapsed, setCollapsed] = useState(false);
   const [polled, setPolled] = useState<Record<number, PresenceStatus>>({});
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [showNewDM, setShowNewDM] = useState(false);
@@ -71,14 +72,35 @@ export default function Sidebar() {
     [token, pathname, router, refresh]
   );
 
+  if (collapsed) {
+    return (
+      <aside className="flex h-full w-12 shrink-0 flex-col items-center border-r border-slate-200 bg-slate-50 transition-all duration-200">
+        <button
+          onClick={() => setCollapsed(false)}
+          title="Expand sidebar"
+          className="mt-3 flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+        >
+          ›
+        </button>
+      </aside>
+    );
+  }
+
   return (
-    <aside className="flex h-full flex-col border-r border-slate-200 bg-slate-50">
+    <aside className="flex h-full w-[280px] shrink-0 flex-col border-r border-slate-200 bg-slate-50 transition-all duration-200">
       {/* Workspace header */}
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <div>
           <h2 className="text-sm font-bold text-slate-900">Hemut Logistics</h2>
           <ConnectionPill status={status} />
         </div>
+        <button
+          onClick={() => setCollapsed(true)}
+          title="Collapse sidebar"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+        >
+          ‹
+        </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 py-3 scrollbar-thin">
