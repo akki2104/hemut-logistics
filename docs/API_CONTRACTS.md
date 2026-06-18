@@ -39,9 +39,10 @@ DM messages reuse the channel message endpoints once the dm channel id is known.
 | GET | `/api/shipments/{shipment_ref}` | mock lookup by `SHIP-0xx`; powers the inline shipment card |
 
 ## AI
-| Method | Path | Notes |
-|---|---|---|
-| POST | `/api/channels/{id}/summarize` | triggers summarization; chunks stream back over the requester's WS as `ai_summary`; returns cached summary if `summary:{id}` is warm |
+| Method | Path | Body | Returns | Notes |
+|---|---|---|---|---|
+| POST | `/api/channels/{id}/summarize` | — | `{request_id, summary?, cached?}` | Triggers summarization. If warm cache, returns `summary` synchronously. Otherwise streams `ai_summary` WS frames. |
+| POST | `/api/channels/{id}/ask` | `{question: string}` | `{request_id}` | Starts tool-calling copilot. Answer streams as `ai_answer` WS frames to the requester only. `question` max 500 chars. |
 
 ## WebSocket
 
@@ -51,7 +52,9 @@ Connect: `GET /ws/{user_id}` (auth via token query param or header). All frames 
 type WSEvent =
   | { type: "message"; data: { id, channel_id, sender_id, sender_name, content, created_at } }
   | { type: "presence_update"; data: { user_id, status: "online"|"away"|"offline", user_name, updated_at } }
-  | { type: "ai_summary"; data: { request_id, chunk: string, done: boolean } }  // requester-only
+  | { type: "ai_summary"; data: { request_id: string, chunk?: string, done: boolean } }   // requester-only
+  | { type: "ai_answer"; data: { request_id: string, chunk?: string, tool_status?: string, done: boolean } }  // requester-only
+  | { type: "channel_added"; data: { channel_id: number } }
   | { type: "pong" }
   | { type: "error"; data: { message: string } }
 
@@ -59,6 +62,17 @@ type WSEvent =
 type ClientMsg = { type: "ping" }   // heartbeat every 30s, refreshes presence TTL
 ```
 
+### `ai_answer` frame details
+
+Three frame shapes arrive over the lifetime of one `/ask` request, all carrying the same `request_id`:
+
+| Shape | When | Client action |
+|---|---|---|
+| `{ tool_status: "Queried shipments (2 found)" }` | Each tool the model calls | Append to live tool-chip list |
+| `{ chunk: "SHIP-003 is…" }` | Each streamed token of the answer | Append to answer text |
+| `{ done: true }` | Stream complete | Stop spinner |
+
 Notes:
-- `ai_summary` carries a `request_id` correlation id and is sent only to the requesting connection — never published to a channel topic.
+- Both `ai_summary` and `ai_answer` carry a `request_id` correlation id and are sent to the requesting connection only — never published to a Redis channel topic.
+- `tool_status` and `chunk` are mutually exclusive within a single frame.
 - Client tracks last `message.id`; on reconnect calls `?after_id=` to replay, dedupes by id, orders by id.

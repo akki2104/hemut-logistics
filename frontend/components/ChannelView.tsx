@@ -9,6 +9,7 @@ import type { Message, PresenceStatus } from "@/lib/types";
 import MessageList from "./MessageList";
 import MessageComposer from "./MessageComposer";
 import SummaryPanel from "./SummaryPanel";
+import AskPanel from "./AskPanel";
 import PresenceDot from "./PresenceDot";
 
 const PRESENCE_POLL_MS = 20_000;
@@ -135,6 +136,8 @@ export default function ChannelView({ channelId }: { channelId: number }) {
     ? `Message ${dm.peer_display_name}`
     : `Message #${channel?.name ?? ""}`;
 
+  const [openPanel, setOpenPanel] = useState<"ask" | "summary" | null>(null);
+
   return (
     <div className="flex min-h-0 flex-1 min-w-0 flex-col">
       {/* Header */}
@@ -152,7 +155,20 @@ export default function ChannelView({ channelId }: { channelId: number }) {
             </span>
           )}
         </div>
-        <SummaryPanel channelId={channelId} />
+        <div className="flex items-center gap-2">
+          <AskPanel
+            channelId={channelId}
+            open={openPanel === "ask"}
+            onOpen={() => setOpenPanel("ask")}
+            onClose={() => setOpenPanel(null)}
+          />
+          <SummaryPanel
+            channelId={channelId}
+            open={openPanel === "summary"}
+            onOpen={() => setOpenPanel("summary")}
+            onClose={() => setOpenPanel(null)}
+          />
+        </div>
       </header>
 
       <MessageList

@@ -6,6 +6,7 @@ Two layers are tested:
   2. The streaming service (chunks delivered to WS, caching, fallback).
 """
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -71,8 +72,87 @@ def _shipment(ref: str, status: str = "DELAYED", eta=None) -> SimpleNamespace:
         status=status,
         origin="Mumbai",
         destination="Delhi",
+        carrier="FedEx",
         eta=eta,
     )
+
+
+# --- Fakes for the Ask tool-calling loop -----------------------------------
+
+
+def _tool_call(call_id: str, name: str, arguments: dict) -> SimpleNamespace:
+    """Mimic one openai tool_call: .id, .function.name, .function.arguments."""
+    return SimpleNamespace(
+        id=call_id,
+        type="function",
+        function=SimpleNamespace(name=name, arguments=json.dumps(arguments)),
+    )
+
+
+def _assistant_with_tools(
+    tool_calls: list[SimpleNamespace], content: str = ""
+) -> SimpleNamespace:
+    """A non-streamed completion whose message carries tool_calls."""
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=content, tool_calls=tool_calls)
+            )
+        ]
+    )
+
+
+def _assistant_no_tools(content: str = "") -> SimpleNamespace:
+    """A non-streamed completion with no tool_calls (model is ready to answer)."""
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=None))]
+    )
+
+
+class _ToolScalars:
+    def __init__(self, rows: list) -> None:
+        self._rows = rows
+
+    def all(self) -> list:
+        return list(self._rows)
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class _ToolResult:
+    """Result supporting both .scalars().all()/.first() and .all() (tuples)."""
+
+    def __init__(self, rows: list) -> None:
+        self._rows = rows
+
+    def scalars(self) -> _ToolScalars:
+        return _ToolScalars(self._rows)
+
+    def all(self) -> list:
+        return list(self._rows)
+
+
+class _ToolSession:
+    """Plain session for direct tool-fn tests; records every statement.
+
+    `batches` lets a test return different rows per successive execute() call —
+    needed by search_messages, which first selects seed ids, then the windowed
+    rows. When only `rows` is given, the same batch answers every call.
+    """
+
+    def __init__(self, rows: list, *, batches: list | None = None) -> None:
+        self._batches = batches if batches is not None else [rows]
+        self._i = 0
+        self.last_stmt = None
+        self.statements: list = []
+
+    async def execute(self, stmt):
+        self.last_stmt = stmt
+        self.statements.append(stmt)
+        batch = self._batches[min(self._i, len(self._batches) - 1)]
+        self._i += 1
+        return _ToolResult(batch)
 
 
 async def _create_channel(client: AsyncClient, headers: dict, name: str) -> int:
@@ -403,3 +483,286 @@ def test_build_prompt_messages_frames_chat_as_data() -> None:
     # Transcript is included and attributed
     assert "[Bob]: SHIP-002 ETA noon" in messages[1]["content"]
     assert "#route-east" in messages[1]["content"]
+
+
+# ===========================================================================
+# "Ask Hemut" — endpoint
+# ===========================================================================
+
+ASK_PATH = CHANNELS_URL + "/{cid}/ask"
+
+
+async def test_ask_requires_auth(client: AsyncClient) -> None:
+    resp = await client.post(ASK_PATH.format(cid=1), json={"question": "hi"})
+    assert resp.status_code == 401
+
+
+async def test_ask_channel_not_found(client: AsyncClient, register_user) -> None:
+    headers, _ = await register_user()
+    resp = await client.post(
+        ASK_PATH.format(cid=9999999), headers=headers, json={"question": "hi"}
+    )
+    assert resp.status_code == 404
+
+
+async def test_ask_non_member_forbidden(client: AsyncClient, register_user) -> None:
+    headers_a, _ = await register_user(email="aa@hemut.com", display_name="AA")
+    headers_b, _ = await register_user(email="bb@hemut.com", display_name="BB")
+    channel_id = await _create_channel(client, headers_a, "private-ask")
+    resp = await client.post(
+        ASK_PATH.format(cid=channel_id), headers=headers_b, json={"question": "hi"}
+    )
+    assert resp.status_code == 403
+
+
+async def test_ask_blank_question_422(client: AsyncClient, register_user) -> None:
+    headers, _ = await register_user()
+    channel_id = await _create_channel(client, headers, "ask-validate")
+    resp = await client.post(
+        ASK_PATH.format(cid=channel_id), headers=headers, json={"question": "   "}
+    )
+    assert resp.status_code == 422
+
+
+async def test_ask_schedules_answer(
+    client: AsyncClient, register_user, mocker
+) -> None:
+    """A valid ask within budget schedules the streaming task and returns a request_id."""
+    headers, user = await register_user()
+    channel_id = await _create_channel(client, headers, "ask-ok")
+
+    mocker.patch("app.services.ai.check_rate_limit", mocker.AsyncMock(return_value=True))
+    sched = mocker.patch("app.services.ai.schedule_answer")
+
+    resp = await client.post(
+        ASK_PATH.format(cid=channel_id),
+        headers=headers,
+        json={"question": "which shipments are delayed?"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["request_id"]
+
+    sched.assert_called_once()
+    args = sched.call_args.args
+    assert args[0] == user["id"]
+    assert args[1] == channel_id
+    assert args[2] == body["request_id"]
+    assert args[3] == "which shipments are delayed?"
+
+
+async def test_ask_rate_limit_returns_429(
+    client: AsyncClient, register_user, mocker
+) -> None:
+    """Over the Ask budget → 429, and no streaming task is scheduled."""
+    headers, _ = await register_user()
+    channel_id = await _create_channel(client, headers, "ask-rl")
+
+    mocker.patch("app.services.ai.check_rate_limit", mocker.AsyncMock(return_value=False))
+    sched = mocker.patch("app.services.ai.schedule_answer")
+
+    resp = await client.post(
+        ASK_PATH.format(cid=channel_id), headers=headers, json={"question": "hello?"}
+    )
+    assert resp.status_code == 429
+    assert "rate limit" in resp.json()["detail"].lower()
+    sched.assert_not_called()
+
+
+# ===========================================================================
+# "Ask Hemut" — tools
+# ===========================================================================
+
+
+async def test_tool_query_shipments_filters_and_serializes() -> None:
+    session = _ToolSession([_shipment("SHIP-004", status="DELAYED")])
+    rows = await ai._tool_query_shipments(session, status="DELAYED")
+    assert rows == [
+        {
+            "shipment_ref": "SHIP-004",
+            "status": "DELAYED",
+            "origin": "Mumbai",
+            "destination": "Delhi",
+            "carrier": "FedEx",
+            "eta": None,
+        }
+    ]
+
+
+async def test_tool_get_shipment_found_and_missing() -> None:
+    found = await ai._tool_get_shipment(
+        _ToolSession([_shipment("SHIP-004")]), ref="ship-004"
+    )
+    assert found["found"] is True
+    assert found["shipment_ref"] == "SHIP-004"
+
+    missing = await ai._tool_get_shipment(_ToolSession([]), ref="SHIP-999")
+    assert missing == {"ref": "SHIP-999", "found": False}
+
+
+async def test_tool_get_channel_history_scoped_to_channel() -> None:
+    """get_channel_history must hard-scope its WHERE to the given channel_id."""
+    session = _ToolSession([("Alice", "SHIP-004 is delayed"), ("Bob", "network issues")])
+    rows = await ai._tool_get_channel_history(session, 5)
+    # Returns chronological order (reversed from DESC fetch); both messages present.
+    assert {"sender": "Alice", "content": "SHIP-004 is delayed"} in rows
+    assert {"sender": "Bob", "content": "network issues"} in rows
+
+    compiled = str(session.last_stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "channel_id" in compiled
+    assert "5" in compiled  # the channel id is bound — no cross-channel leak
+
+
+async def test_tool_get_channel_history_empty_channel() -> None:
+    """Empty channel returns an empty list, no error."""
+    rows = await ai._tool_get_channel_history(_ToolSession([]), 99)
+    assert rows == []
+
+
+async def test_dispatch_tool_unknown_returns_error() -> None:
+    out = await ai._dispatch_tool("nope", {}, 1, _ToolSession([]))
+    assert json.loads(out) == {"error": "unknown tool nope"}
+
+
+# ===========================================================================
+# "Ask Hemut" — streaming task
+# ===========================================================================
+
+
+async def test_run_answer_stream_executes_tools_then_streams(mocker) -> None:
+    """Tool round runs, a tool_status frame is sent, then the answer streams."""
+    mock_client = mocker.MagicMock()
+    mock_client.chat.completions.create = mocker.AsyncMock(
+        side_effect=[
+            _assistant_with_tools(
+                [_tool_call("c1", "query_shipments", {"status": "DELAYED"})]
+            ),
+            _assistant_no_tools(""),  # round 2: no more tools → break
+            _FakeStream([_chunk("3 shipments are delayed.")]),  # phase 2 stream
+        ]
+    )
+    mocker.patch("app.services.ai._client", mock_client)
+    dispatch = mocker.patch(
+        "app.services.ai._dispatch_tool",
+        mocker.AsyncMock(return_value='[{"shipment_ref": "SHIP-004"}]'),
+    )
+    mocker.patch(
+        "app.services.ai.async_session_factory",
+        return_value=_FakeSession([]),
+    )
+    mocker.patch(
+        "app.services.ai.build_grounding_footer", mocker.AsyncMock(return_value="")
+    )
+    send_mock = mocker.AsyncMock()
+    mocker.patch.object(ai.manager, "send_to", send_mock)
+
+    await ai.run_answer_stream(
+        user_id=1, channel_id=5, request_id="rid-a", question="which are delayed?"
+    )
+
+    dispatch.assert_awaited_once()
+
+    frames = [c.args[1] for c in send_mock.await_args_list]
+    # All frames are ai_answer to user 1 with the right correlation id
+    for f in frames:
+        assert f["type"] == "ai_answer"
+        assert f["data"]["request_id"] == "rid-a"
+    for c in send_mock.await_args_list:
+        assert c.args[0] == 1
+
+    # A live tool_status line was emitted
+    assert any(f["data"].get("tool_status") for f in frames)
+    # The answer text streamed through
+    streamed = "".join(f["data"].get("chunk", "") for f in frames)
+    assert "delayed" in streamed
+    # Final frame closes the stream
+    assert frames[-1]["data"]["done"] is True
+
+
+async def test_run_answer_stream_no_tools_direct_answer(mocker) -> None:
+    """If the model calls no tools, dispatch never runs and it answers directly."""
+    mock_client = mocker.MagicMock()
+    mock_client.chat.completions.create = mocker.AsyncMock(
+        side_effect=[
+            _assistant_no_tools(""),
+            _FakeStream([_chunk("Here is a direct answer.")]),
+        ]
+    )
+    mocker.patch("app.services.ai._client", mock_client)
+    dispatch = mocker.patch("app.services.ai._dispatch_tool", mocker.AsyncMock())
+    mocker.patch(
+        "app.services.ai.async_session_factory", return_value=_FakeSession([])
+    )
+    mocker.patch(
+        "app.services.ai.build_grounding_footer", mocker.AsyncMock(return_value="")
+    )
+    send_mock = mocker.AsyncMock()
+    mocker.patch.object(ai.manager, "send_to", send_mock)
+
+    await ai.run_answer_stream(
+        user_id=1, channel_id=5, request_id="rid-b", question="hi"
+    )
+
+    dispatch.assert_not_awaited()
+    streamed = "".join(
+        c.args[1]["data"].get("chunk", "") for c in send_mock.await_args_list
+    )
+    assert "direct answer" in streamed
+    assert send_mock.await_args_list[-1].args[1]["data"]["done"] is True
+
+
+async def test_run_answer_stream_appends_grounding_footer(mocker) -> None:
+    """A shipment ref in the answer triggers the grounding footer, then done."""
+    mock_client = mocker.MagicMock()
+    mock_client.chat.completions.create = mocker.AsyncMock(
+        side_effect=[
+            _assistant_no_tools(""),
+            _FakeStream([_chunk("SHIP-004 is delayed.")]),
+        ]
+    )
+    mocker.patch("app.services.ai._client", mock_client)
+    mocker.patch("app.services.ai._dispatch_tool", mocker.AsyncMock())
+    mocker.patch(
+        "app.services.ai.async_session_factory", return_value=_FakeSession([])
+    )
+    mocker.patch(
+        "app.services.ai.build_grounding_footer",
+        mocker.AsyncMock(
+            return_value="\n---\n**Referenced shipments**\n- `SHIP-004` — DELAYED"
+        ),
+    )
+    send_mock = mocker.AsyncMock()
+    mocker.patch.object(ai.manager, "send_to", send_mock)
+
+    await ai.run_answer_stream(
+        user_id=1, channel_id=5, request_id="rid-c", question="status of SHIP-004?"
+    )
+
+    streamed = "".join(
+        c.args[1]["data"].get("chunk", "") for c in send_mock.await_args_list
+    )
+    assert "Referenced shipments" in streamed
+    assert send_mock.await_args_list[-1].args[1]["data"]["done"] is True
+
+
+async def test_run_answer_stream_fallback_on_error(mocker) -> None:
+    """LLM error before any chunk → single fallback frame, never raises."""
+    mock_client = mocker.MagicMock()
+    mock_client.chat.completions.create = mocker.AsyncMock(
+        side_effect=RuntimeError("LLM down")
+    )
+    mocker.patch("app.services.ai._client", mock_client)
+    mocker.patch(
+        "app.services.ai.async_session_factory", return_value=_FakeSession([])
+    )
+    send_mock = mocker.AsyncMock()
+    mocker.patch.object(ai.manager, "send_to", send_mock)
+
+    await ai.run_answer_stream(
+        user_id=1, channel_id=5, request_id="rid-d", question="anything?"
+    )
+
+    assert send_mock.await_count == 1
+    payload = send_mock.await_args_list[0].args[1]
+    assert payload["data"]["done"] is True
+    assert payload["data"]["chunk"] == ai.FALLBACK_MESSAGE

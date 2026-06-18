@@ -8,6 +8,7 @@
  */
 
 import type {
+  AskResponse,
   Channel,
   DirectoryUser,
   DMConversation,
@@ -142,4 +143,17 @@ export function requestSummary(
     token,
     { method: "POST" }
   );
+}
+
+// --- Ask Hemut (conversational copilot; answer streams over WS) ------------
+
+export function requestAnswer(
+  token: string,
+  channelId: number,
+  question: string
+): Promise<AskResponse> {
+  return apiFetch<AskResponse>(`/api/channels/${channelId}/ask`, token, {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
 }
