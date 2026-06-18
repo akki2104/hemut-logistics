@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { Message } from "@/lib/types";
 import { extractShipmentRefs } from "@/lib/ship";
 import ShipmentCard from "./ShipmentCard";
@@ -52,6 +52,19 @@ export default function MessageItem({
   const refs = extractShipmentRefs(message.content);
   const replyCount = message.reply_count ?? 0;
 
+  // Flash the reply button briefly whenever a new reply arrives (count goes up).
+  const prevCountRef = useRef(replyCount);
+  const [flash, setFlash] = useState(false);
+  useEffect(() => {
+    if (replyCount > prevCountRef.current) {
+      setFlash(true);
+      const t = setTimeout(() => setFlash(false), 3000);
+      prevCountRef.current = replyCount;
+      return () => clearTimeout(t);
+    }
+    prevCountRef.current = replyCount;
+  }, [replyCount]);
+
   return (
     <div className={`flex gap-3 px-4 ${showHeader ? "mt-3" : "mt-0.5"}`}>
       {/* Avatar column (only on the first message of a group) */}
@@ -90,7 +103,11 @@ export default function MessageItem({
           <div className="mt-1">
             <button
               onClick={() => onReply(message)}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+              className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-xs transition-colors duration-300 ${
+                flash
+                  ? "bg-indigo-100 font-semibold text-indigo-700 ring-1 ring-indigo-400"
+                  : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+              }`}
             >
               <span>💬</span>
               {replyCount > 0

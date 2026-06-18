@@ -32,9 +32,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <WebSocketProvider>
       <WorkspaceProvider>
-        <div className="grid h-screen grid-cols-[280px_1fr] overflow-hidden">
+        <div className="flex h-screen overflow-hidden">
           <Sidebar />
-          <main className="flex min-w-0 flex-col overflow-hidden bg-white">{children}</main>
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white">{children}</main>
         </div>
       </WorkspaceProvider>
     </WebSocketProvider>
