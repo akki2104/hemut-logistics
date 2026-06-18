@@ -24,13 +24,18 @@ from app.main import app
 
 
 async def _blocking_listen():
-    """Mock pubsub.listen() — blocks until the subscriber task is cancelled."""
+    """Mock pubsub.listen() — blocks until the subscriber task is cancelled.
+
+    Must re-raise CancelledError so cancellation propagates out of the async
+    generator into _subscriber_task's except-CancelledError handler. Silencing
+    it causes the subscriber task to loop forever and deadlock WS teardown.
+    """
     try:
         await asyncio.sleep(86400)
     except asyncio.CancelledError:
-        return
+        raise
     if False:
-        yield  # noqa: unreachable — but makes Python treat this as an async generator
+        yield  # noqa: unreachable — makes Python treat this as an async generator
 
 
 # ---------------------------------------------------------------------------

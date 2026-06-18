@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class RegisterRequest(BaseModel):
@@ -159,6 +159,31 @@ class SummarizeResponse(BaseModel):
     request_id: str
     cached: bool
     summary: Optional[str] = None
+
+
+class AskRequest(BaseModel):
+    """Body for POST /api/channels/{id}/ask — one natural-language question."""
+
+    question: str = Field(min_length=1, max_length=500)
+
+    @field_validator("question")
+    @classmethod
+    def question_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Question cannot be blank")
+        return v
+
+
+class AskResponse(BaseModel):
+    """Response from POST /api/channels/{id}/ask.
+
+    The answer is never returned in the body — it streams over the requester's
+    WebSocket as `ai_answer` events keyed by `request_id` (chunks + tool_status
+    progress lines, terminated by done=true).
+    """
+
+    request_id: str
 
 
 # ---------------------------------------------------------------------------

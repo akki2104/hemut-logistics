@@ -8,7 +8,9 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: hemut
     ports:
-      - "5432:5432"
+      # Host 5433 → container 5432. Avoids colliding with a native Windows
+      # PostgreSQL install that may already own host port 5432.
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 

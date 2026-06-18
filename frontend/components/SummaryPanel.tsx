@@ -21,9 +21,15 @@ import { useWSListener } from "@/lib/websocket-context";
  * The stream is private — the backend sends it only to the requester's socket,
  * never the channel topic, so other members never see your summary.
  */
-export default function SummaryPanel({ channelId }: { channelId: number }) {
+interface SummaryPanelProps {
+  channelId: number;
+  open: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+}
+
+export default function SummaryPanel({ channelId, open, onOpen, onClose }: SummaryPanelProps) {
   const { token } = useAuth();
-  const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -49,7 +55,7 @@ export default function SummaryPanel({ channelId }: { channelId: number }) {
 
   const run = async () => {
     if (!token || loading || streaming) return;
-    setOpen(true);
+    onOpen();
     setLoading(true);
     setError(null);
     setRateLimited(false);
@@ -81,7 +87,7 @@ export default function SummaryPanel({ channelId }: { channelId: number }) {
   return (
     <div className="relative">
       <button
-        onClick={() => (open ? setOpen(false) : void run())}
+        onClick={() => (open ? onClose() : void run())}
         className="flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-100"
       >
         <span>✨</span> Catch me up
@@ -106,7 +112,7 @@ export default function SummaryPanel({ channelId }: { channelId: number }) {
               )}
             </div>
             <button
-              onClick={() => setOpen(false)}
+              onClick={onClose}
               className="text-slate-400 hover:text-slate-600"
               aria-label="Close summary"
             >

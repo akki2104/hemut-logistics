@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_current_user
 from app.db import get_redis, get_session
 from app.models import Channel, Membership, Message, User
-from app.schemas import SummarizeResponse
+from app.schemas import AskRequest, AskResponse, SummarizeResponse
 from app.services import ai as ai_service
 
 logger = logging.getLogger(__name__)
@@ -104,3 +104,54 @@ async def summarize_channel(
     )
     ai_service.schedule_summary(user.id, channel_id, request_id)
     return SummarizeResponse(request_id=request_id, cached=False, summary=None)
+
+
+@router.post("/channels/{channel_id}/ask", response_model=AskResponse)
+async def ask_channel(
+    channel_id: int,
+    payload: AskRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[aioredis.Redis, Depends(get_redis)],
+) -> AskResponse:
+    """Ask Hemut a question about this channel and the shipment board.
+
+    Unlike summarize there is no cache (answers are question-specific) and no
+    empty-channel short-circuit (the model can still answer from the shipments
+    table even if the channel has no messages). Every call is billable, so the
+    per-user Ask rate limit is checked before scheduling.
+    """
+    channel = await session.get(Channel, channel_id)
+    if channel is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found"
+        )
+
+    await _assert_member(session, channel_id, user.id)
+
+    allowed = await ai_service.check_rate_limit(
+        redis,
+        user.id,
+        key_template=ai_service.ASK_RATE_KEY,
+        max_calls=ai_service.RATE_LIMIT_MAX,
+        window=ai_service.RATE_LIMIT_WINDOW,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Ask rate limit reached ({ai_service.RATE_LIMIT_MAX} questions "
+                f"per {ai_service.RATE_LIMIT_WINDOW // 60} minutes). "
+                "Try again shortly."
+            ),
+        )
+
+    request_id = uuid.uuid4().hex
+    logger.info(
+        "Ask scheduled for channel_id=%d user_id=%d (request_id=%s)",
+        channel_id,
+        user.id,
+        request_id,
+    )
+    ai_service.schedule_answer(user.id, channel_id, request_id, payload.question)
+    return AskResponse(request_id=request_id)

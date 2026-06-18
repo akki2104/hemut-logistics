@@ -72,6 +72,10 @@ export interface SummarizeResponse {
   summary: string | null;
 }
 
+export interface AskResponse {
+  request_id: string;
+}
+
 export type PresenceStatus = "online" | "away" | "offline";
 
 /** A directory entry used by the "start a DM" picker. */
@@ -103,6 +107,16 @@ export interface WSAiSummaryEvent {
   data: { request_id: string; chunk: string; done: boolean };
 }
 
+export interface WSAiAnswerEvent {
+  type: "ai_answer";
+  data: {
+    request_id: string;
+    chunk?: string;
+    tool_status?: string;
+    done: boolean;
+  };
+}
+
 export interface WSConnectedEvent {
   type: "connected";
   user_id: number;
@@ -126,6 +140,7 @@ export type WSEvent =
   | WSMessageEvent
   | WSPresenceEvent
   | WSAiSummaryEvent
+  | WSAiAnswerEvent
   | WSConnectedEvent
   | WSPongEvent
   | WSErrorEvent

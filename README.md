@@ -14,7 +14,7 @@ backend and Next.js 14 (App Router, TypeScript) on the frontend.
 - [Quick start](#quick-start)
 - [Architecture overview](#architecture-overview)
 - [How Redis is used (two distinct roles)](#how-redis-is-used-two-distinct-roles)
-- [AI feature — "Catch me up"](#ai-feature--catch-me-up)
+- [AI features — "Catch me up" + "Ask Hemut"](#ai-features)
 - [Real-time correctness](#real-time-correctness)
 - [Security](#security)
 - [Testing](#testing)
@@ -94,7 +94,7 @@ Browser (Next.js 14, App Router)
   ├── XHR  (lib/xhr.ts)  → REST: login, register, post-message   [graded constraint]
   ├── fetch (lib/api.ts) → REST: channels, history, DMs, shipments, presence, summarize
   └── WebSocket (one per user) → /api/ws?token=<JWT>
-          ↳ receives: message, presence_update, ai_summary, channel_added frames
+          ↳ receives: message, presence_update, ai_summary, ai_answer, channel_added frames
 
 FastAPI worker (async throughout)
   ├── REST handlers → validate → PostgreSQL (durable source of truth)
@@ -144,22 +144,57 @@ Postgres is the **only** durable store. Nothing that must survive a restart live
 
 ---
 
-## AI feature — "Catch me up"
+## AI features
 
-### Why this feature
+Two AI features ship: **"Catch me up"** (single-shot thread summarizer) and **"Ask Hemut"**
+(conversational copilot with tool-calling). Both stream privately to the requester's WebSocket
+only, are rate-limited per user, and share the same provider-agnostic LLM client (`.env` swap).
+
+### "Ask Hemut" — conversational copilot
+
+#### Why this feature
+"Catch me up" tells you what happened. "Ask Hemut" lets you interrogate it: *"Which shipments are
+delayed and who's handling them?"*, *"What's the ETA on SHIP-004?"*, *"Why was SHIP-006 late?"*.
+A dispatcher can get a grounded, specific answer in seconds instead of scanning tables and threads.
+
+#### How it's implemented
+- **Trigger:** "💬 Ask Hemut" button → type a question → `POST /api/channels/{id}/ask {question}`.
+- **Two-phase tool loop (stream=False, then stream=True):** mixing streaming with tool-calling is
+  unreliable across providers. Instead:
+  1. **Phase 1 (non-streamed, up to `MAX_TOOL_ROUNDS=3`):** the model receives the question and a
+     tool list. It decides which tools to call; the backend executes them as bound-parameter SQL
+     queries and feeds results back. Live "tool-call chips" appear in the UI as each tool runs.
+  2. **Phase 2 (streamed):** with all tool results in context, the model streams the final answer
+     token-by-token over the requester's WebSocket as `ai_answer` frames.
+- **Tools the model can call:**
+  - `query_shipments(status?, origin?, destination?)` — filter the shipments table.
+  - `get_shipment(ref)` — single lookup by `SHIP-0xx` reference.
+  - `get_channel_history()` — loads the last 150 messages; the model does semantic search in its
+    context window. Correct for hundreds of messages; pgvector embeddings are the documented
+    scale-path.
+- **Private delivery:** `ai_answer` frames carry a `request_id` correlation id and are sent to the
+  requester's socket only — never published to a Redis channel topic.
+- **Rate limit:** separate `ask_rate:{user_id}` budget (independent from summary budget).
+- **Prompt injection:** retrieved chat text is framed as DATA in the system prompt; tools are
+  read-only; `channel_id` is always server-derived (no tenancy leak).
+
+---
+
+### "Catch me up" — thread summarizer
+
+#### Why this feature
 Logistics dispatchers coming onto a shift must catch up on overnight channel activity — reading
 100+ messages across `#route-east` and `#dispatch-ops` is slow and error-prone. A two-minute
 summary of *what happened, who handled what, which shipments are involved, and what's still
 blocked* is concrete, real user value tied to genuine pain — not novelty for its own sake.
 
-### How it's implemented
+#### How it's implemented
 - **Trigger:** "✨ Catch me up" button in the channel header → `POST /api/channels/{id}/summarize`.
 - **Context:** backend fetches the **last 50 messages** of the channel (hard cap — never the full
   history) and builds a logistics-flavored system prompt (extract shipment refs, delays, ETAs,
   action items, owners).
-- **Model:** Gemini Flash via the **OpenAI-compatible endpoint** using the `openai` package
-  (`AsyncOpenAI`, `base_url=https://generativelanguage.googleapis.com/v1beta/openai/`,
-  `stream=True`). Provider-agnostic — swapping to Groq/OpenRouter/OpenAI is a `.env` change only.
+- **Model:** provider-agnostic via the OpenAI-compatible endpoint (`AsyncOpenAI`, configurable
+  `base_url` and `LLM_MODEL` in `.env`). Swapping to Groq/OpenRouter/OpenAI is a one-line change.
 - **Streaming delivery:** each chunk is pushed to **the requester's WebSocket connection only**
   (`manager.send_to`) as an `ai_summary` frame with a `request_id` correlation id and a final
   `done:true`. It is **never** published to the channel's Redis topic, so other members don't
@@ -247,10 +282,17 @@ pytest                         # all
 pytest tests/test_ai.py -v     # AI feature only
 ```
 
-- **82 backend tests** across auth, channels, messages, DMs, shipments, users, WebSocket, and AI.
+**Test setup notes:**
+- Tests use a **separate `hemut_test` database** to avoid collisions with seed data (`SHIP-001..010`
+  already in the dev `hemut` DB). Create it once: `createdb hemut_test` (or via psql/pgAdmin).
+- `docker-compose.yml` maps host port **5433 → container 5432** to avoid colliding with a native
+  Windows Postgres install. The `DATABASE_URL` in `.env` uses `:5433`; conftest derives the test
+  URL automatically (`hemut_test` at the same host/port/credentials).
+- **98 backend tests** across auth, channels, messages, DMs, shipments, users, WebSocket, and AI.
 - Cover happy paths **and** failure paths (auth enforcement, membership isolation, blank input,
-  wrong password, unknown email, idempotent DM creation, cache hit/miss, LLM fallback).
-- The **AI test mocks the LLM client** (`AsyncOpenAI`) so CI is deterministic and non-billable.
+  wrong password, unknown email, idempotent DM creation, cache hit/miss, LLM fallback, tool-call
+  dispatch, Ask Hemut rate limit, channel-scoped query isolation).
+- The **AI tests mock the LLM client** (`AsyncOpenAI`) so CI is deterministic and non-billable.
 - Tests run on a transaction-rollback session — no DB truncation between tests.
 
 Frontend tests are not included (encouraged but not required by the assignment).
@@ -291,7 +333,7 @@ backend/
 frontend/
   app/            App Router pages: login, register, (app)/channel, (app)/dm
   components/     Sidebar, ChannelView, MessageList/Item/Composer, ShipmentCard,
-                  PresenceDot, SummaryPanel
+                  PresenceDot, SummaryPanel, AskPanel
   lib/            xhr.ts (graded), api.ts (fetch), websocket-context, workspace-context,
                   auth-context, types.ts
 docs/             ARCHITECTURE.md · API_CONTRACTS.md · PROGRESS.md · GIT_RULES.md
@@ -313,5 +355,6 @@ Full contract in [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md). Summary:
 | POST / GET | `/api/dm/{peer_id}` · `/api/dm` | find-or-create DM / list DMs |
 | GET | `/api/shipments/{ref}` | mock lookup powering the inline card |
 | POST | `/api/channels/{id}/summarize` | AI summary; streams `ai_summary` frames over the requester's WS |
+| POST | `/api/channels/{id}/ask` | AI copilot; `{question}` body; returns `{request_id}`; answer streams as `ai_answer` WS frames |
 | GET | `/api/presence?user_ids=1,2` | online/away/offline |
-| WS | `/api/ws?token=<JWT>` | one per user; `message` · `presence_update` · `ai_summary` · `channel_added` |
+| WS | `/api/ws?token=<JWT>` | one per user; `message` · `presence_update` · `ai_summary` · `ai_answer` · `channel_added` |
