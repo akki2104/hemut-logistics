@@ -19,6 +19,7 @@ backend and Next.js 14 (App Router, TypeScript) on the frontend.
 - [Security](#security)
 - [Testing](#testing)
 - [Tradeoffs & known limitations](#tradeoffs--known-limitations)
+- [Challenges & how we solved them](#challenges--how-we-solved-them)
 - [Project layout](#project-layout)
 - [API reference](#api-reference)
 
@@ -314,6 +315,174 @@ Frontend tests are not included (encouraged but not required by the assignment).
 - **Presence has a polling fallback.** Live dots come from `presence_update` frames; the sidebar also
   polls `GET /api/presence` every 20s as a backstop.
 - **Webhooks are not implemented** (optional/bonus in the assignment).
+
+---
+
+## Challenges & how we solved them
+
+Real problems hit during a 72-hour solo build. Documented here because the rubric asks for it and
+because each one has a genuine lesson behind it.
+
+---
+
+### 1. Native Postgres shadowing Docker — `InvalidPasswordError` on every test
+
+**What happened.** A Windows machine with a local `postgresql-x64-18` service already bound to
+host port `5432`. Docker published its container on the same port. From the host, `asyncpg`
+connected to the *native* instance (wrong credentials), not the Docker one. `docker exec psql`
+worked fine because that runs *inside* the container, which never touches the host port. Every
+async DB test failed with `InvalidPasswordError`. GSS/SSL theories were red herrings — the
+password was flat-out going to the wrong server.
+
+**How we solved it.** Changed `docker-compose.yml` to map host `5433 → container 5432`, and
+updated `DATABASE_URL` in `.env` to `:5433`. The native service keeps its port; Docker gets a
+clean, dedicated one.
+
+**Lesson.** Port collisions are silent. Always verify with a direct connection (`asyncpg.connect`
+from a throwaway script) before debugging auth.
+
+---
+
+### 2. Seed data colliding with test fixtures — `UniqueViolationError`
+
+**What happened.** The dev database is seeded with `SHIP-001` through `SHIP-010` and two fixed
+users. Tests that created their own fixtures hit unique-constraint violations because those refs
+already existed in the same DB.
+
+**How we solved it.** Created a dedicated `hemut_test` database. `conftest.py` derives the test
+URL automatically from the production URL (`settings.DATABASE_URL.rsplit("/", 1)[0] + "/hemut_test"`),
+so there's nothing extra to configure. Tests and seed data never share a DB.
+
+**Lesson.** Test isolation at the DB level is non-negotiable once a seed exists. Transaction
+rollback is enough for individual test isolation but not for schema/fixture separation.
+
+---
+
+### 3. Redis connection pool bound to a dead event loop — `"Event loop is closed"`
+
+**What happened.** The module-level `redis_pool` in `db.py` is created at import time, which
+binds its underlying connections to the first asyncio event loop. pytest-asyncio creates a *new*
+event loop per test. When a test tried to reuse the pool, the old connections belonged to the
+previous (now-closed) loop, and asyncio refused them.
+
+**How we solved it.** Two things together: an `autouse` async fixture that calls
+`await redis_pool.disconnect()` after every test (so each test gets a fresh pool on next use),
+and `asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())` at the top of
+`conftest.py` (Windows-specific fix for the `ProactorEventLoop` not supporting the selector
+operations asyncio-redis needs).
+
+**Lesson.** Module-level connection pools and per-test event loops are incompatible without
+explicit teardown. On Windows, `ProactorEventLoop` is the default and breaks several async
+networking libraries — always set `WindowsSelectorEventLoopPolicy` in test configuration.
+
+---
+
+### 4. Ask Hemut returning zero results — keyword search misses conversational context
+
+**What happened.** The first implementation of "Ask Hemut" used a SQL `ILIKE` keyword search
+(`search_messages(query)`). When asked *"Why was SHIP-006 late?"*, the tool searched for
+`"SHIP-006"` and `"late"` — but the driver's actual update was *"facing network issues"*. No
+keyword match, zero hits, the model answered "I couldn't find any relevant information."
+
+**First attempt (rejected).** A proximity window approach: expand the result set to ±3 messages
+around each keyword hit, hoping the conversational context would be nearby. This was fragile —
+thread replies could be arbitrarily far from the original message, and tuning the window is
+guesswork.
+
+**How we actually solved it.** Replaced keyword search with `get_channel_history`: load the last
+150 messages for the channel and put the full text into the model's context window. The LLM finds
+the "network issues" reply because it can read the thread in order, not because it matched a
+keyword. This is correct at logistics-channel scale (hundreds of messages per day). The
+documented production upgrade path is pgvector embeddings for channels with thousands of messages.
+
+**Lesson.** Keyword search solves *lookup*, not *understanding*. For "why did X happen?"-style
+questions that span a conversational thread, semantic retrieval or full-context is the right tool.
+
+---
+
+### 5. LLM provider tool-calling quirks (Groq / Llama 3.3 70B)
+
+Gemini Flash free-tier quota ran out mid-development. Switched to Groq (`llama-3.3-70b-versatile`)
+via the same OpenAI-compatible endpoint — confirming the provider-agnostic design. That switch
+surfaced three Llama-specific bugs:
+
+**a) String parameter where integer was expected.**
+The tool schema declared `limit` as `integer`. Llama passed `{"limit": "150"}` (a string). Groq
+rejected it with a 400. *Fix:* removed the `limit` parameter from the tool schema entirely —
+the server-side constant `CHANNEL_HISTORY_LIMIT = 150` controls it, the model doesn't need to
+decide.
+
+**b) `None` tool arguments on a no-parameter tool.**
+After removing the parameter, Llama called `get_channel_history` with `args = None` instead of
+`args = {}`. The dispatch code tried to call `.get()` on `None` and crashed. *Fix:* simplified
+dispatch to `await _tool_get_channel_history(session, channel_id)` with no argument unpacking
+at all.
+
+**c) Parallel tool calls generating malformed blobs.**
+When given a complex multi-tool prompt, Llama 3.3 attempted to invoke tools in parallel and
+produced a single response chunk that looked like `query_shipments {"status": "DELAYED"}` — the
+function name and JSON fused into one string rather than two separate fields. *Fix:*
+`parallel_tool_calls=False` on the Phase 1 create call. This forces sequential tool calls and the
+model produces clean, spec-compliant responses.
+
+**Lesson.** The OpenAI function-calling spec has a lot of implicit assumptions about argument
+type coercion and parallel call format that not every model honours. Keep tool schemas as minimal
+as possible (no optional parameters with types the model might coerce), and disable parallel calls
+unless you've confirmed the model handles them correctly.
+
+---
+
+### 6. Streaming + tool-calling mixed in one request is unreliable
+
+**What happened.** The initial design attempted `stream=True` with `tools=[...]` in a single
+create call — the way OpenAI's API supports it via streaming `tool_calls` deltas. In practice,
+the Gemini compatibility layer and Groq both behave inconsistently: partial tool-call deltas
+arrive out of order, accumulating arguments is fragile, and error recovery is unclear.
+
+**How we solved it.** Two-phase approach: Phase 1 is `stream=False` with tools (model emits
+structured `tool_calls`, we execute them, feed results back — fast, deterministic), then Phase 2
+is `stream=True` with no tools (just text streaming). Net: ~2 LLM calls per question, a couple
+of seconds of latency, and zero streaming-tool assembly code. The complexity budget is spent
+on actual tool logic, not on delta accumulation.
+
+**Lesson.** When mixing streaming and structured output, separate them into two calls. The
+"streaming tool calls" pattern exists in the spec but provider support is inconsistent enough that
+the two-phase approach is more reliable across providers for production use.
+
+---
+
+### 7. React Strict Mode double-mounting the WebSocket
+
+**What happened.** React 18 Strict Mode in development intentionally mounts every component
+twice, then unmounts the first copy. The WebSocket provider opened a connection, the double-mount
+immediately called the cleanup (closing it), then the "real" mount opened another. This caused
+spurious disconnects and reconnects on every page load in dev, and in some cases the second
+connection raced the close of the first.
+
+**How we solved it.** Made connection state closure-local to each `useEffect` run rather than
+held in a ref shared across runs. Each effect invocation owns its own `ws` variable, so when
+Strict Mode's first mount cleans up and closes its socket, the second mount's effect creates an
+independent socket and is unaffected. The reconnect-replay logic (tracking `connectionEpoch`)
+is robust to this by design — it replays any missed messages on every reconnect.
+
+**Lesson.** Any long-lived resource (sockets, subscriptions, timers) in a React effect must
+be scoped to the *closure* of that particular effect run, not stored in a ref outside it, or
+Strict Mode's intentional double-invoke will cause them to interfere.
+
+---
+
+### 8. Async Alembic migrations
+
+**What happened.** Alembic's default `env.py` uses a synchronous engine. SQLAlchemy 2.0 with
+`asyncpg` is async-only — running the sync env against an async URL raises an error immediately.
+
+**How we solved it.** Implemented the async `env.py` pattern: `run_migrations_online` is an
+`async def` wrapped in `asyncio.run()`, using `AsyncEngine.connect()` and
+`conn.run_sync(do_run_migrations)`. This is documented in the SQLAlchemy 2.0 migration guide
+but not in the default Alembic template — it was a one-time setup cost.
+
+**Lesson.** Async Alembic env is non-obvious but well-documented. Set it up at the start of the
+project before any migrations exist — retrofitting it later is messier.
 
 ---
 
