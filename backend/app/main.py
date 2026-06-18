@@ -15,11 +15,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-]
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Hemut Logistics API starting up")
@@ -36,8 +31,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -56,3 +51,9 @@ app.include_router(users.router, prefix="/api/users", tags=["users"])
 async def health_check() -> dict[str, str]:
     """Health check used by load balancers and local verification."""
     return {"status": "ok"}
+
+
+@app.head("/ping", tags=["health"])
+async def ping() -> None:
+    """Lightweight reachability probe — returns 200 with no body."""
+    return None
