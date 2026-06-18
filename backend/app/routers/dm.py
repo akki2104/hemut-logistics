@@ -13,15 +13,17 @@ means they always reference the same channel, so the find-or-create is
 idempotent regardless of who initiates first.
 """
 
+import json
 import logging
 from typing import Annotated
 
+import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
-from app.db import get_session
+from app.db import get_redis, get_session
 from app.models import Channel, Membership, Message, User
 from app.schemas import DMConversationOut, DMOpenOut, PeerOut
 
@@ -51,6 +53,7 @@ async def open_dm(
     peer_user_id: int,
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[aioredis.Redis, Depends(get_redis)],
 ) -> DMOpenOut:
     """Find or create a DM channel between caller and peer.
 
@@ -73,6 +76,7 @@ async def open_dm(
         select(Channel).where(Channel.name == name, Channel.is_dm.is_(True))
     )
     channel = result.scalar_one_or_none()
+    is_new = channel is None
 
     if channel is None:
         channel = Channel(name=name, is_dm=True, created_by=user.id)
@@ -95,6 +99,32 @@ async def open_dm(
     await _ensure_membership(session, user.id, channel.id)
     await _ensure_membership(session, peer_user_id, channel.id)
     await session.flush()
+
+    # Notify both users so their WS subscribers re-query memberships and
+    # subscribe to the new channel topic. Without this, neither user's
+    # existing socket knows about channel:{id} and first messages are lost
+    # until they reconnect manually.
+    # Workaround: Redis pub/sub can't add topics to a live subscription
+    # mid-run, so we signal the frontend to reconnect (forceReconnect in
+    # workspace-context.tsx) which triggers a fresh _load_channel_ids() call.
+    if is_new:
+        try:
+            payload = json.dumps({
+                "type": "channel_added",
+                "data": {
+                    "id": channel.id,
+                    "name": channel.name,
+                    "description": channel.description,
+                    "is_dm": channel.is_dm,
+                    "created_by": channel.created_by,
+                    "created_at": channel.created_at.isoformat(),
+                    "unread_count": 0,
+                },
+            })
+            await redis.publish(f"user:{user.id}", payload)
+            await redis.publish(f"user:{peer_user_id}", payload)
+        except Exception:
+            logger.warning("Failed to publish channel_added for DM channel_id=%d", channel.id)
 
     return DMOpenOut(channel_id=channel.id, peer=PeerOut.model_validate(peer))
 
