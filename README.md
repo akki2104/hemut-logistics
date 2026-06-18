@@ -486,6 +486,43 @@ project before any migrations exist — retrofitting it later is messier.
 
 ---
 
+### 9. Cross-worker WebSocket delivery — messages dropped when workers don't share memory
+
+**What happened.** FastAPI runs under uvicorn, which in production spawns multiple worker
+processes. Each worker has its own in-memory `ConnectionManager` (`dict[user_id → WebSocket]`).
+If user A's WebSocket is held by Worker 1 and user B posts a message that lands on Worker 2,
+Worker 2's manager has no entry for user A — `send_to` silently no-ops and the message is never
+delivered. With a single worker in development this is completely invisible; under any real load
+it's a silent correctness failure.
+
+**How we solved it.** Two separate Redis connection pools and a subscriber-task architecture:
+
+- When a message is posted (on any worker), the handler publishes it to Redis topic `channel:{id}`
+  using the commands pool (`redis_pool`).
+- On connect, each user's WebSocket endpoint spawns a background `asyncio.Task`
+  (`_subscriber_task`) that opens its own pubsub connection (from `redis_pubsub_pool`,
+  `socket_timeout=None`) and subscribes to `channel:{id}` for every channel the user is a member
+  of, plus `user:{id}` for personal events like `channel_added`.
+- The subscriber task receives every published event from Redis and calls
+  `manager.send_to(user_id, data)` — which relays it to the socket *on this worker*, the one that
+  actually holds the connection. The in-memory manager is intentionally per-worker; Redis is the
+  cross-worker bus.
+- The subscriber task reconnects with exponential backoff (capped at 30s) on any transient Redis
+  error, so a brief Redis blip doesn't permanently sever a live connection.
+
+The two pools are kept deliberately separate: pub/sub connections block on `listen()` and must
+never time out (`socket_timeout=None`), while command connections need a timeout to surface hung
+operations quickly. Mixing them into one pool would either cause subscriptions to time out or
+cause commands to block indefinitely.
+
+**Lesson.** In-memory state (connection maps, session caches) is per-process. Any state that must
+be visible across workers needs an out-of-process store. The subscriber-task pattern is the right
+solution: each worker subscribes on behalf of its own connected users, and cross-worker delivery
+is handled entirely by Redis. This is also why the README explicitly calls out the two Redis
+roles — it's not incidental, it's load-bearing.
+
+---
+
 ## Project layout
 
 ```
