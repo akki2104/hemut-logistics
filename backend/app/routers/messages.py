@@ -4,11 +4,13 @@ POST /api/channels/{channel_id}/messages
     Persists the message, advances the sender's read cursor, then publishes
     to Redis so the WebSocket fan-out layer can deliver it to all members.
     sender_id is always derived from the JWT — never trusted from the body.
+    Optional parent_id creates a thread reply instead of a root message.
 
 GET /api/channels/{channel_id}/messages
     Cursor-based pagination by message id. Supports both directions:
-    - ?before_id=N&limit=50  → history scroll-back
-    - ?after_id=N&limit=50   → reconnect replay (client sends last seen id)
+    - ?before_id=N&limit=50         → history scroll-back (root messages only)
+    - ?after_id=N&limit=50          → reconnect replay (client sends last seen id)
+    - ?parent_id=N&limit=50         → thread replies for a specific root message
 """
 
 import json
@@ -17,7 +19,7 @@ from typing import Annotated, Optional
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
@@ -72,10 +74,26 @@ async def post_message(
 
     await _assert_member(session, channel_id, user.id)
 
+    # Validate parent_id: must exist and belong to the same channel
+    if body.parent_id is not None:
+        parent = await session.get(Message, body.parent_id)
+        if parent is None or parent.channel_id != channel_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Parent message not found in this channel",
+            )
+        # Replies cannot nest further — enforce one level of threading
+        if parent.parent_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot reply to a reply — only one level of threading is supported",
+            )
+
     msg = Message(
         channel_id=channel_id,
         sender_id=user.id,
         content=body.content.strip(),
+        parent_id=body.parent_id,
     )
     session.add(msg)
     await session.flush()  # populates msg.id and msg.created_at
@@ -102,6 +120,8 @@ async def post_message(
         sender_name=user.display_name,
         content=msg.content,
         created_at=msg.created_at,
+        parent_id=msg.parent_id,
+        reply_count=0,
     )
 
     # Publish to Redis for WebSocket fan-out — fire-and-forget (non-blocking
@@ -117,6 +137,8 @@ async def post_message(
                 "sender_name": out.sender_name,
                 "content": out.content,
                 "created_at": out.created_at.isoformat(),
+                "parent_id": out.parent_id,
+                "reply_count": 0,
             },
         }
     )
@@ -127,7 +149,10 @@ async def post_message(
         # durably in Postgres; WS delivery is best-effort.
         logger.exception("Redis publish failed for channel_id=%d", channel_id)
 
-    logger.info("Message id=%d posted to channel_id=%d", msg.id, channel_id)
+    logger.info(
+        "Message id=%d posted to channel_id=%d (parent_id=%s)",
+        msg.id, channel_id, msg.parent_id,
+    )
     return out
 
 
@@ -138,12 +163,14 @@ async def get_messages(
     session: Annotated[AsyncSession, Depends(get_session)],
     before_id: Optional[int] = Query(None, description="Cursor: return messages before this id"),
     after_id: Optional[int] = Query(None, description="Cursor: return messages after this id (reconnect replay)"),
+    parent_id: Optional[int] = Query(None, description="When set, return replies to this message instead of root messages"),
     limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
 ) -> MessageListOut:
     """Cursor-based message history for a channel.
 
     Use before_id for scroll-back (infinite scroll upward).
     Use after_id for reconnect replay (client sends last seen message id).
+    Use parent_id to fetch thread replies for a specific root message.
     Results are always returned in ascending id order.
     has_more=True means there are additional pages in the requested direction.
     """
@@ -155,8 +182,16 @@ async def get_messages(
 
     await _assert_member(session, channel_id, user.id)
 
-    # Build the cursor filter
+    # Base filter: channel scope + cursor direction
     filters = [Message.channel_id == channel_id]
+
+    if parent_id is not None:
+        # Thread view: replies to a specific parent message
+        filters.append(Message.parent_id == parent_id)
+    else:
+        # Channel timeline: root messages only (excludes replies)
+        filters.append(Message.parent_id.is_(None))
+
     if before_id is not None:
         filters.append(Message.id < before_id)
     if after_id is not None:
@@ -172,7 +207,7 @@ async def get_messages(
             .limit(limit + 1)
         )
     else:
-        # After-id or initial load: ascending order
+        # After-id / thread / initial load: ascending order
         stmt = (
             select(Message, User.display_name)
             .join(User, User.id == Message.sender_id)
@@ -190,6 +225,19 @@ async def get_messages(
     if before_id is not None:
         rows = list(reversed(rows))
 
+    # For root messages (channel timeline), attach reply counts
+    if parent_id is None and rows:
+        root_ids = [msg.id for msg, _ in rows]
+        count_stmt = (
+            select(Message.parent_id, func.count(Message.id).label("cnt"))
+            .where(Message.parent_id.in_(root_ids))
+            .group_by(Message.parent_id)
+        )
+        count_rows = (await session.execute(count_stmt)).all()
+        reply_counts = {pid: cnt for pid, cnt in count_rows}
+    else:
+        reply_counts = {}
+
     messages = [
         MessageOut(
             id=msg.id,
@@ -198,6 +246,8 @@ async def get_messages(
             sender_name=display_name,
             content=msg.content,
             created_at=msg.created_at,
+            parent_id=msg.parent_id,
+            reply_count=reply_counts.get(msg.id, 0),
         )
         for msg, display_name in rows
     ]
