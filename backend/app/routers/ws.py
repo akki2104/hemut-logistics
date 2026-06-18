@@ -47,9 +47,19 @@ class ConnectionManager:
 
     def __init__(self) -> None:
         self._connections: dict[int, WebSocket] = {}
+        # Monotonic per-user connection counter. Each new socket bumps it; the
+        # current value is the "generation" of the live connection. A subscriber
+        # task captures the generation it was started for and stops relaying once
+        # a newer connection supersedes it — this is what prevents a stale
+        # subscriber from double-delivering messages to the current socket.
+        self._generation: dict[int, int] = {}
 
-    async def connect(self, user_id: int, ws: WebSocket) -> None:
-        """Accept ws, closing any existing connection for this user first."""
+    async def connect(self, user_id: int, ws: WebSocket) -> int:
+        """Accept ws, closing any existing connection for this user first.
+
+        Returns the generation id for this connection. The caller passes it to
+        the subscriber task so the task can detect when it has been superseded.
+        """
         old = self._connections.get(user_id)
         if old is not None:
             try:
@@ -57,10 +67,23 @@ class ConnectionManager:
             except Exception:
                 pass
         await ws.accept()
+        generation = self._generation.get(user_id, 0) + 1
+        self._generation[user_id] = generation
         self._connections[user_id] = ws
+        return generation
 
-    def disconnect(self, user_id: int) -> None:
-        self._connections.pop(user_id, None)
+    def is_current(self, user_id: int, generation: int) -> bool:
+        """True if `generation` is still the live connection for this user."""
+        return self._generation.get(user_id) == generation
+
+    def disconnect(self, user_id: int, ws: WebSocket) -> None:
+        """Remove the connection, but ONLY if `ws` is still the live one.
+
+        A reconnect can leave the old handler running briefly; without this
+        guard the old handler's teardown would evict the newer connection.
+        """
+        if self._connections.get(user_id) is ws:
+            self._connections.pop(user_id, None)
 
     async def send_to(self, user_id: int, data: dict) -> None:
         """Send JSON to one user. Silently no-ops if the user is not connected."""
@@ -71,7 +94,7 @@ class ConnectionManager:
             await ws.send_json(data)
         except Exception:
             # Connection broke — clean up so we don't attempt again.
-            self.disconnect(user_id)
+            self.disconnect(user_id, ws)
 
     def is_connected(self, user_id: int) -> bool:
         return user_id in self._connections
@@ -110,12 +133,15 @@ async def _load_channel_ids(user_id: int) -> list[int]:
         return list(result.scalars().all())
 
 
-async def _subscriber_task(user_id: int, topics: list[str]) -> None:
+async def _subscriber_task(user_id: int, topics: list[str], generation: int) -> None:
     """Continuously relay Redis channel events to the user's WebSocket.
 
     Owns its own pubsub connection and reconnects with exponential backoff on
-    any transient Redis error (timeout, connection reset, etc.).  Only exits
-    permanently on asyncio.CancelledError (clean WS disconnect).
+    any transient Redis error (timeout, connection reset, etc.).  Exits on
+    asyncio.CancelledError (clean WS disconnect) OR when a newer connection for
+    the same user supersedes this one — `generation` is captured at start and
+    checked per message, so a stale task stops relaying instead of delivering
+    every message twice to the current socket.
     """
     backoff = 1.0
     while True:
@@ -132,6 +158,16 @@ async def _subscriber_task(user_id: int, topics: list[str]) -> None:
             async for message in pubsub.listen():
                 if message["type"] != "message":
                     continue
+                # A newer connection has replaced this one — stop relaying so we
+                # don't double-deliver to the current socket. Cleanup runs via
+                # the finally block; the old handler also cancels us.
+                if not manager.is_current(user_id, generation):
+                    logger.info(
+                        "Subscriber for user_id=%d generation=%d superseded; exiting",
+                        user_id,
+                        generation,
+                    )
+                    return
                 try:
                     data = json.loads(message["data"])
                 except (json.JSONDecodeError, TypeError):
@@ -185,7 +221,9 @@ async def websocket_endpoint(
         return
 
     # -- Accept connection, replacing any prior one for this user --
-    await manager.connect(user_id, ws)
+    # generation identifies THIS connection; a later reconnect bumps it so this
+    # socket's subscriber task knows when it has been superseded.
+    generation = await manager.connect(user_id, ws)
 
     # Separate Redis client for presence (commands, not pub/sub)
     redis: aioredis.Redis = aioredis.Redis(connection_pool=redis_pool)
@@ -202,8 +240,8 @@ async def websocket_endpoint(
 
         # Start background fan-out task (auto-reconnects on Redis blips)
         subscriber = asyncio.create_task(
-            _subscriber_task(user_id, topics),
-            name=f"ws-sub-{user_id}",
+            _subscriber_task(user_id, topics, generation),
+            name=f"ws-sub-{user_id}-gen{generation}",
         )
 
         # Acknowledge the connection
@@ -238,13 +276,16 @@ async def websocket_endpoint(
             except asyncio.CancelledError:
                 pass
 
-        # Remove presence on clean disconnect
-        try:
-            await _clear_presence(redis, user_id)
-        except Exception:
-            pass
+        # Remove presence ONLY if this is still the live connection. On a
+        # reconnect the superseded old handler must not clear the presence key
+        # that the new connection just set (would flicker the user offline).
+        if manager.is_current(user_id, generation):
+            try:
+                await _clear_presence(redis, user_id)
+            except Exception:
+                pass
 
-        manager.disconnect(user_id)
+        manager.disconnect(user_id, ws)
         await redis.aclose()
         logger.info("WebSocket disconnected for user_id=%d", user_id)
 

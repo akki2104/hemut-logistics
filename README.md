@@ -325,7 +325,7 @@ pytest tests/test_ai.py -v     # AI feature only
 - Tests use **`testcontainers`** — a temporary Postgres 15 container starts automatically at the
   beginning of the test session and is torn down when it ends. No manual database creation or
   migration step needed. Docker Desktop just needs to be running.
-- **104 backend tests** across auth, channels, messages (including thread replies), DMs, shipments, users, WebSocket, and AI.
+- **107 backend tests** across auth, channels, messages (including thread replies), DMs, shipments, users, WebSocket (including connection-replacement / duplicate-delivery guards), and AI.
 - Cover happy paths **and** failure paths (auth enforcement, membership isolation, blank input,
   wrong password, unknown email, idempotent DM creation, cache hit/miss, LLM fallback, tool-call
   dispatch, Ask Hemut rate limit, channel-scoped query isolation).
@@ -561,6 +561,42 @@ roles — it's not incidental, it's load-bearing.
 
 ---
 
+### 10. Blocker: a live subscriber can't add a topic — and the reconnect workaround double-delivered
+
+**The blocker.** When a user opens a new DM or is added to a channel, their already-running
+`_subscriber_task` is blocked inside `pubsub.listen()`, subscribed to a fixed topic set captured
+at connect time. Redis pub/sub offers no clean way to inject a new topic into a subscription that
+is mid-`listen()` from another coroutine — you'd have to interrupt the listen, re-issue
+`subscribe()`, and resume, with all the race handling that implies. For a 72-hour build that's a
+real blocker.
+
+**The workaround (shipped).** Per the assignment's "document the blocker, ship a workaround"
+guidance: instead of mutating a live subscription, the server publishes `channel_added` to the
+affected users' `user:{id}` topic, and the client **force-reconnects** the single WebSocket. The
+new connection re-runs `_load_channel_ids()` and subscribes to the fresh topic set — reusing the
+already-hardened reconnect/replay path rather than inventing live-subscription surgery. Cost: a
+~100ms blip. (Also listed under [Tradeoffs](#tradeoffs--known-limitations).)
+
+**The bug the workaround introduced.** Making DM creation reconnect *both* users surfaced a latent
+race: on reconnect, the old connection's subscriber task could still be alive (briefly, or
+permanently if its receive loop hadn't yet noticed the close) while the new one started. Both
+subscribers relayed to the **current** socket via `manager.send_to`, so every channel frame was
+delivered twice. The frontend increments a root message's `reply_count` once per reply frame, so
+the badge doubled (4 vs 2, 6 vs 3). A refresh masked it because the server recomputes the true
+count from the database.
+
+**The fix.** Each connection is tagged with a monotonic **generation** in `ConnectionManager`. A
+subscriber checks its generation per message and stops relaying the moment a newer connection
+supersedes it; `disconnect` only evicts the map entry if the socket is still the live one; and a
+superseded handler skips clearing presence so the user doesn't flicker offline. Covered by three
+`ConnectionManager` regression tests in `tests/test_ws.py`.
+
+**Lesson.** A reconnect-based workaround is only safe if old and new connections can't both act on
+shared state during the handover. A generation token is the minimal primitive that makes
+"only the latest connection is live" enforceable at every relay point.
+
+---
+
 ## Project layout
 
 ```
@@ -573,7 +609,7 @@ backend/
     auth.py       JWT + bcrypt + get_current_user dependency
     seed.py       idempotent seed: 5 channels, 3 users (dispatcher/driver/akash), 10 shipments, 81 channel messages, 3 DM conversations (30 DM messages)
   alembic/        async env.py + migrations (initial schema + thread replies parent_id)
-  tests/          104 tests (LLM mocked)
+  tests/          107 tests (LLM mocked)
 frontend/
   app/            App Router pages: login, register, (app)/channel, (app)/dm
   components/     Sidebar, ChannelView, MessageList/Item/Composer, ShipmentCard,

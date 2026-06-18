@@ -16,6 +16,68 @@ from starlette.testclient import TestClient
 
 from app.auth import create_access_token
 from app.main import app
+from app.routers.ws import ConnectionManager
+
+
+# ---------------------------------------------------------------------------
+# ConnectionManager: connection-replacement correctness
+#
+# Regression guard for the "reply count doubles" bug: when a user reconnects,
+# the old subscriber task must stop relaying so messages aren't delivered twice
+# to the current socket, and the old handler's teardown must not evict the new
+# connection. Both rely on per-connection generations.
+# ---------------------------------------------------------------------------
+
+
+async def test_connect_bumps_generation_and_supersedes_old():
+    """Each connect returns a higher generation; only the latest is current."""
+    mgr = ConnectionManager()
+    ws_old = AsyncMock()
+    ws_new = AsyncMock()
+
+    gen_old = await mgr.connect(1, ws_old)
+    gen_new = await mgr.connect(1, ws_new)
+
+    assert gen_new > gen_old
+    # Replacing the connection closes the old socket.
+    ws_old.close.assert_awaited_once()
+    # The old subscriber sees itself as superseded and will stop relaying;
+    # only the new connection is current.
+    assert mgr.is_current(1, gen_old) is False
+    assert mgr.is_current(1, gen_new) is True
+
+
+async def test_disconnect_does_not_evict_newer_connection():
+    """A stale handler's teardown must leave the newer connection intact."""
+    mgr = ConnectionManager()
+    ws_old = AsyncMock()
+    ws_new = AsyncMock()
+
+    await mgr.connect(1, ws_old)
+    await mgr.connect(1, ws_new)
+
+    # Old handler tears down last — must be a no-op for the live connection.
+    mgr.disconnect(1, ws_old)
+    assert mgr.is_connected(1) is True
+
+    # The real disconnect (matching ws) removes it.
+    mgr.disconnect(1, ws_new)
+    assert mgr.is_connected(1) is False
+
+
+async def test_send_to_targets_only_current_connection():
+    """send_to delivers exactly once, to the latest socket."""
+    mgr = ConnectionManager()
+    ws_old = AsyncMock()
+    ws_new = AsyncMock()
+
+    await mgr.connect(7, ws_old)
+    await mgr.connect(7, ws_new)
+
+    await mgr.send_to(7, {"type": "message", "data": {"id": 1}})
+
+    ws_new.send_json.assert_awaited_once()
+    ws_old.send_json.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
