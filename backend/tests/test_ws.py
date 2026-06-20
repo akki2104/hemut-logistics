@@ -20,64 +20,57 @@ from app.routers.ws import ConnectionManager
 
 
 # ---------------------------------------------------------------------------
-# ConnectionManager: connection-replacement correctness
+# ConnectionManager: multi-tab connection correctness
 #
-# Regression guard for the "reply count doubles" bug: when a user reconnects,
-# the old subscriber task must stop relaying so messages aren't delivered twice
-# to the current socket, and the old handler's teardown must not evict the new
-# connection. Both rely on per-connection generations.
+# Guards the new multi-tab model: connect() never evicts, disconnect() removes
+# only the given socket, send_to() broadcasts to every open tab, and presence
+# is only cleared when the last socket closes.
 # ---------------------------------------------------------------------------
 
 
-async def test_connect_bumps_generation_and_supersedes_old():
-    """Each connect returns a higher generation; only the latest is current."""
+async def test_connect_adds_socket_to_set():
+    """Each connect adds to the set; no existing socket is closed."""
     mgr = ConnectionManager()
-    ws_old = AsyncMock()
-    ws_new = AsyncMock()
+    ws1 = AsyncMock()
+    ws2 = AsyncMock()
 
-    gen_old = await mgr.connect(1, ws_old)
-    gen_new = await mgr.connect(1, ws_new)
+    await mgr.connect(1, ws1)
+    await mgr.connect(1, ws2)
 
-    assert gen_new > gen_old
-    # Replacing the connection closes the old socket.
-    ws_old.close.assert_awaited_once()
-    # The old subscriber sees itself as superseded and will stop relaying;
-    # only the new connection is current.
-    assert mgr.is_current(1, gen_old) is False
-    assert mgr.is_current(1, gen_new) is True
-
-
-async def test_disconnect_does_not_evict_newer_connection():
-    """A stale handler's teardown must leave the newer connection intact."""
-    mgr = ConnectionManager()
-    ws_old = AsyncMock()
-    ws_new = AsyncMock()
-
-    await mgr.connect(1, ws_old)
-    await mgr.connect(1, ws_new)
-
-    # Old handler tears down last — must be a no-op for the live connection.
-    mgr.disconnect(1, ws_old)
     assert mgr.is_connected(1) is True
-
-    # The real disconnect (matching ws) removes it.
-    mgr.disconnect(1, ws_new)
-    assert mgr.is_connected(1) is False
+    ws1.close.assert_not_awaited()
+    ws2.close.assert_not_awaited()
 
 
-async def test_send_to_targets_only_current_connection():
-    """send_to delivers exactly once, to the latest socket."""
+async def test_disconnect_removes_only_the_given_socket():
+    """Disconnecting one socket leaves the other intact; user stays connected."""
     mgr = ConnectionManager()
-    ws_old = AsyncMock()
-    ws_new = AsyncMock()
+    ws1 = AsyncMock()
+    ws2 = AsyncMock()
 
-    await mgr.connect(7, ws_old)
-    await mgr.connect(7, ws_new)
+    await mgr.connect(1, ws1)
+    await mgr.connect(1, ws2)
+
+    mgr.disconnect(1, ws1)
+    assert mgr.is_connected(1) is True  # ws2 still live
+
+    mgr.disconnect(1, ws2)
+    assert mgr.is_connected(1) is False  # last socket gone
+
+
+async def test_send_to_broadcasts_to_all_sockets():
+    """send_to delivers to every open tab for the user."""
+    mgr = ConnectionManager()
+    ws1 = AsyncMock()
+    ws2 = AsyncMock()
+
+    await mgr.connect(7, ws1)
+    await mgr.connect(7, ws2)
 
     await mgr.send_to(7, {"type": "message", "data": {"id": 1}})
 
-    ws_new.send_json.assert_awaited_once()
-    ws_old.send_json.assert_not_awaited()
+    ws1.send_json.assert_awaited_once()
+    ws2.send_json.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
